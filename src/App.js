@@ -199,8 +199,6 @@ function App() {
   
           try {
             await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
-            
-            // Send the personalized message
             const response = await sendMessage(accessToken, msg.kc_id, msg.body);
             
             if (response.success) {
@@ -248,6 +246,13 @@ function App() {
         throw new Error("Failed to update dispatch status");
       }
   
+      // Update URL parameter after successful dispatch
+      if (window.history.pushState) {
+        const newUrl = new URL(window.location);
+        newUrl.searchParams.set('start_dispatch', '2'); // Change to 2 to indicate completion
+        window.history.pushState({}, '', newUrl);
+      }
+  
       if (!dispatchId) {
         alert(
           `Processed ${messages.length} messages with ${MAX_RETRY_ATTEMPTS} attempts\n` +
@@ -262,8 +267,19 @@ function App() {
     } finally {
       setDispatching(false);
     }
-  }, [accessToken, dispatchId, updateDispatchStatus, processedMessages,retryCounts]);
+  }, [accessToken, dispatchId, updateDispatchStatus, processedMessages, retryCounts]);
   
+  // Modify the auto-start dispatch effect to check for status 2
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const dmsg_id = urlParams.get('dmsg_id');
+    const start = urlParams.get('start_dispatch');
+  
+    // Only auto-start if status is 1 (not completed)
+    if (isLoggedIn && dmsg_id && start === '1' && !dispatching) {
+      handleDispatch(dmsg_id);
+    }
+  }, [isLoggedIn, dispatching, handleDispatch]);
 
   // Auto-start dispatch when both logged in and ID is present
   useEffect(() => {
