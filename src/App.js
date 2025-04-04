@@ -468,8 +468,16 @@
 //   );
 // }
 
-// export default App;
-// ...[imports remain unchanged]...
+
+
+
+
+
+
+
+
+
+
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { login, sendMessage } from "./services/kingschat";
 import {
@@ -478,7 +486,7 @@ import {
 } from "./services/dispatchService";
 
 // Constants
-const MAX_RETRY_ATTEMPTS = 1;
+const MAX_RETRY_ATTEMPTS = 2;
 const MESSAGE_DELAY_MS = 1000;
 const RETRY_DELAY_MS = 1000;
 
@@ -500,9 +508,10 @@ function App() {
     failed: 0,
   });
   const [retryCounts, setRetryCounts] = useState({});
-  const [processedMessages, setProcessedMessages] = useState(new Set());
+  const [messageStatuses, setMessageStatuses] = useState({});
   const progressRef = useRef(progress);
 
+  // Update progress with ref synchronization
   const updateProgress = (updateFn) => {
     setProgress(prev => {
       const updated = updateFn(prev);
@@ -511,6 +520,7 @@ function App() {
     });
   };
 
+  // Initialize from URL params
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
@@ -527,6 +537,7 @@ function App() {
     }
   }, []);
 
+  // Login handler
   const handleLogin = useCallback(async () => {
     setError("");
     try {
@@ -543,6 +554,7 @@ function App() {
       setAccessToken(authResponse.accessToken);
       setIsLoggedIn(true);
 
+      // Submit to callback URL
       const form = document.createElement("form");
       form.method = "POST";
       form.action = "https://kingslist.pro/callback";
@@ -567,6 +579,7 @@ function App() {
     }
   }, []);
 
+  // Verify session on mount
   useEffect(() => {
     const verifySession = async () => {
       const session = localStorage.getItem("kc_session");
@@ -601,11 +614,20 @@ function App() {
     verifySession();
   }, []);
 
+  // Update dispatch status with accurate counts
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
       const { success, failed } = progressRef.current;
       const totalProcessed = success + failed;
       const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
+
+      // Calculate actual success/fail counts from message statuses
+      const actualSuccess = Object.values(messageStatuses).filter(
+        status => status === "success"
+      ).length;
+      const actualFailed = Object.values(messageStatuses).filter(
+        status => status === "failed"
+      ).length;
 
       const response = await fetch(
         "https://kingslist.pro/app/default/api/updateDispatchCount.php",
@@ -617,31 +639,44 @@ function App() {
             dmsg_id,
             dispatch_count: totalProcessed,
             attempts: totalAttempts,
-            status: failed > 0 ? 1 : 2,
+            status: actualFailed > 0 ? 1 : 2,
+            success_count: actualSuccess,
+            failed_count: actualFailed,
           }),
         }
       );
 
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Failed to update status");
+      
+      // Verify the counts match
+      if (data.success_count !== actualSuccess || data.failed_count !== actualFailed) {
+        console.warn("Count mismatch between client and server", {
+          client: { actualSuccess, actualFailed },
+          server: data
+        });
+      }
+      
       return data;
     } catch (error) {
       console.error("Status update failed:", error);
       throw error;
     }
-  }, [retryCounts]);
+  }, [retryCounts, messageStatuses]);
 
+  // Main dispatch function with improved tracking
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
     updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
     setRetryCounts({});
-    setProcessedMessages(new Set());
+    setMessageStatuses({});
 
     try {
       const batchData = await fetchDispatchBatch(dmsg_id);
       let messages = prepareMessagesForDispatch(batchData);
 
+      // Process message templates
       messages = messages.map(msg => ({
         ...msg,
         body: msg.body
@@ -649,24 +684,36 @@ function App() {
           .replace(/<fullname>/g, msg.fullname),
       }));
 
-      let remainingMessages = messages;
-      let attempt = 0;
-
       updateProgress(prev => ({ ...prev, total: messages.length }));
+
+      let remainingMessages = [...messages];
+      let attempt = 0;
 
       while (remainingMessages.length > 0 && attempt < MAX_RETRY_ATTEMPTS) {
         const currentBatch = [...remainingMessages];
         remainingMessages = [];
 
         for (const msg of currentBatch) {
-          if (processedMessages.has(msg.kc_id)) continue;
+          // Skip if already succeeded
+          if (messageStatuses[msg.kc_id] === "success") continue;
 
           try {
             await new Promise(res => setTimeout(res, MESSAGE_DELAY_MS));
-            const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+            
+            // Track attempt
+            setRetryCounts(prev => ({
+              ...prev,
+              [msg.kc_id]: (prev[msg.kc_id] || 0) + 1,
+            }));
 
+            const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+            
             if (res.success) {
-              setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+              // Mark as successful
+              setMessageStatuses(prev => ({
+                ...prev,
+                [msg.kc_id]: "success"
+              }));
               updateProgress(prev => ({
                 ...prev,
                 current: prev.current + 1,
@@ -674,25 +721,29 @@ function App() {
               }));
               continue;
             }
+            
+            // If not successful but no error thrown
+            throw new Error("API returned unsuccessful response");
           } catch (err) {
             console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+            
+            // Check if we should retry
+            const currentRetry = retryCounts[msg.kc_id] || 0;
+            if (currentRetry + 1 < MAX_RETRY_ATTEMPTS) {
+              remainingMessages.push(msg);
+            } else {
+              // Final failure
+              setMessageStatuses(prev => ({
+                ...prev,
+                [msg.kc_id]: "failed"
+              }));
+              updateProgress(prev => ({
+                ...prev,
+                current: prev.current + 1,
+                failed: prev.failed + 1,
+              }));
+            }
           }
-
-          const currentRetry = retryCounts[msg.kc_id] || 0;
-          if (currentRetry + 1 < MAX_RETRY_ATTEMPTS) {
-            remainingMessages.push(msg);
-          } else {
-            updateProgress(prev => ({
-              ...prev,
-              current: prev.current + 1,
-              failed: prev.failed + 1,
-            }));
-          }
-
-          setRetryCounts(prev => ({
-            ...prev,
-            [msg.kc_id]: (prev[msg.kc_id] || 0) + 1,
-          }));
         }
 
         attempt++;
@@ -701,21 +752,29 @@ function App() {
         }
       }
 
+      // Final status update with accurate counts
       const finalStatus = await updateDispatchStatus(dmsg_id);
-      if (!finalStatus.success) throw new Error("Update failed");
+      if (!finalStatus.success) throw new Error("Final status update failed");
 
+      // Mark as completed
       sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set("start_dispatch", "2");
-      window.history.pushState({}, "", newUrl.toString());
+      
+      // Update URL
+      if (window.history.pushState) {
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set("start_dispatch", "2");
+        window.history.pushState({}, "", newUrl.toString());
+      }
 
     } catch (err) {
       setError(`Dispatch error: ${err.message}`);
+      console.error("Dispatch failed:", err);
     } finally {
       setDispatching(false);
     }
-  }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
+  }, [accessToken, updateDispatchStatus, retryCounts, messageStatuses]);
 
+  // Auto-start dispatch when conditions are met
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
@@ -733,7 +792,7 @@ function App() {
     }
   }, [isLoggedIn, dispatching, handleDispatch]);
 
-  // Helper: Visual Progress Bar
+  // UI Components
   const ProgressBar = () => {
     if (!progress.total) return null;
     const percent = (progress.current / progress.total) * 100;
@@ -742,7 +801,7 @@ function App() {
         <div
           style={{
             width: `${percent}%`,
-            background: "#28a745",
+            background: progress.failed > 0 ? "#ffc107" : "#28a745",
             height: "100%",
             borderRadius: "8px",
             transition: "width 0.3s ease-in-out",
@@ -751,56 +810,115 @@ function App() {
       </div>
     );
   };
+
   const DispatchAnalytics = () => {
-    if (dispatching || !progress.total || progress.current !== progress.total) return null;
+    if (!progress.total || progress.current !== progress.total) return null;
   
     return (
-      <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
-        <h4>Dispatch Summary</h4>
-        <p><strong>Total:</strong> {progress.total}</p>
-        <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
-        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p>
-        <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
-          Object.values(retryCounts).filter(count => count > 1).length
-        }</p>
-        <a href="https://kingslist.pro/app/default/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
-          Go to Messages Page
+      <div style={{ 
+        marginTop: "20px", 
+        padding: "15px", 
+        border: "1px solid #ddd",
+        borderRadius: "8px",
+        background: "#f8f9fa"
+      }}>
+        <h4 style={{ marginTop: 0 }}>Dispatch Summary</h4>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "10px" }}>
+          <div>
+            <p style={{ margin: "5px 0", fontWeight: "bold" }}>Total Messages:</p>
+            <p style={{ margin: "5px 0" }}>{progress.total}</p>
+          </div>
+          <div>
+            <p style={{ margin: "5px 0", fontWeight: "bold", color: "#28a745" }}>Successful:</p>
+            <p style={{ margin: "5px 0", color: "#28a745" }}>{progress.success}</p>
+          </div>
+          <div>
+            <p style={{ margin: "5px 0", fontWeight: "bold", color: "#dc3545" }}>Failed:</p>
+            <p style={{ margin: "5px 0", color: "#dc3545" }}>{progress.failed}</p>
+          </div>
+          <div>
+            <p style={{ margin: "5px 0", fontWeight: "bold", color: "#ffc107" }}>Retried:</p>
+            <p style={{ margin: "5px 0", color: "#ffc107" }}>
+              {Object.values(retryCounts).filter(count => count > 1).length}
+            </p>
+          </div>
+        </div>
+        <a 
+          href="https://kingslist.pro/app/default/messages" 
+          style={{
+            display: "inline-block",
+            marginTop: "15px",
+            padding: "8px 15px",
+            background: "#007bff",
+            color: "white",
+            borderRadius: "4px",
+            textDecoration: "none"
+          }}
+        >
+          View Messages
         </a>
       </div>
     );
   };
-  return (
-    <div style={{ padding: "30px", maxWidth: "600px", margin: "auto", fontFamily: "sans-serif" }}>
-      <h2 style={{ color: "#2a2a2a" }}>Kingslist Portal</h2>
-      <p>Welcome! Log in with KingsChat to begin dispatching your message batch.</p>
 
+  return (
+    <div style={{ 
+      padding: "30px", 
+      maxWidth: "600px", 
+      margin: "auto", 
+      fontFamily: "sans-serif",
+      boxShadow: "0 2px 10px rgba(0,0,0,0.1)",
+      borderRadius: "8px"
+    }}>
+      <h2 style={{ color: "#2a2a2a", marginTop: 0 }}>KingsChat Dispatch Portal</h2>
+      
       {error && (
-        <div style={{ background: "#ffe0e0", padding: "10px", borderRadius: "5px", color: "#b00020" }}>
+        <div style={{ 
+          background: "#ffe0e0", 
+          padding: "10px", 
+          borderRadius: "5px", 
+          color: "#b00020",
+          marginBottom: "20px"
+        }}>
           {error}
         </div>
       )}
 
       {!isLoggedIn ? (
-        <button
-          onClick={handleLogin}
-          style={{
-            padding: "10px 20px",
-            background: "#007bff",
-            color: "white",
-            border: "none",
-            borderRadius: "5px",
-            cursor: "pointer",
-            fontWeight: "bold",
-          }}
-        >
-          Log in with KingsChat
-        </button>
+        <div style={{ textAlign: "center" }}>
+          <button
+            onClick={handleLogin}
+            style={{
+              padding: "12px 24px",
+              background: "#007bff",
+              color: "white",
+              border: "none",
+              borderRadius: "5px",
+              cursor: "pointer",
+              fontWeight: "bold",
+              fontSize: "16px"
+            }}
+          >
+            Log in with KingsChat
+          </button>
+        </div>
       ) : (
         <div>
           {dispatching && (
-            <div style={{ margin: "20px 0", color: "#28a745" }}>
-              Dispatching... {progress.current} / {progress.total} (
-              {progress.success} success, {progress.failed} failed)
+            <div style={{ 
+              margin: "20px 0", 
+              padding: "15px",
+              background: "#f8f9fa",
+              borderRadius: "8px"
+            }}>
+              <h4 style={{ marginTop: 0 }}>Dispatching Messages</h4>
+              <p>
+                Progress: {progress.current} of {progress.total}
+                <br />
+                <span style={{ color: "#28a745" }}>Success: {progress.success}</span>
+                {" | "}
+                <span style={{ color: "#dc3545" }}>Failed: {progress.failed}</span>
+              </p>
               <ProgressBar />
             </div>
           )}
@@ -808,20 +926,24 @@ function App() {
           <DispatchAnalytics />
 
           {!dispatching && dispatchId && (
-            <button
-              onClick={() => handleDispatch(dispatchId)}
-              style={{
-                padding: "10px 20px",
-                background: "#28a745",
-                color: "white",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
-            >
-              Start Dispatch
-            </button>
+            <div style={{ textAlign: "center", marginTop: "20px" }}>
+              <button
+                onClick={() => handleDispatch(dispatchId)}
+                style={{
+                  padding: "12px 24px",
+                  background: "#28a745",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "5px",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                  fontSize: "16px"
+                }}
+                disabled={dispatching}
+              >
+                {dispatching ? "Dispatching..." : "Start Dispatch"}
+              </button>
+            </div>
           )}
         </div>
       )}
