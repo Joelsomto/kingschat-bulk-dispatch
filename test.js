@@ -1,109 +1,94 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { login, sendMessage } from "./services/kingschat";
-import { fetchDispatchBatch, prepareMessagesForDispatch } from "./services/dispatchService";
+// ... (previous imports and constants remain the same)
 
-// ... (previous constants and state declarations remain the same)
+function App() {
+  // ... (previous state declarations remain the same)
 
-const handleDispatch = useCallback(async (dmsg_id) => {
-  setError("");
-  setDispatching(true);
-  setProgress({ current: 0, total: 0, success: 0, failed: 0 });
-  progressRef.current = { current: 0, total: 0, success: 0, failed: 0 };
-  setRetryCounts({});
-  setProcessedMessages(new Set());
+  // Check for dispatch parameters on component mount
 
-  try {
-    const batchData = await fetchDispatchBatch(dmsg_id);
-    let messages = prepareMessagesForDispatch(batchData);
-    
-    // Replace placeholders in message bodies
-    messages = messages.map(msg => ({
-      ...msg,
-      body: msg.body
-        .replace(/<kc_username>/g, msg.username)
-        .replace(/<fullname>/g, msg.fullname)
-    }));
 
-    let remainingMessages = messages.filter(msg => !processedMessages.has(msg.kc_id));
-    let attempt = 0;
+  // ... (handleLogin and verifySession remain the same)
 
-    setProgress(prev => ({
-      ...prev,
-      total: messages.length
-    }));
+  const handleDispatch = useCallback(async (dmsg_id) => {
+    // Check if already completed
+    if (sessionStorage.getItem(`dispatch_completed_${dmsg_id}`) === "done") {
+      return;
+    }
 
-    while (remainingMessages.length > 0 && attempt < MAX_RETRY_ATTEMPTS) {
-      const currentBatch = [...remainingMessages];
-      remainingMessages = [];
+    setError("");
+    setDispatching(true);
+    setProgress({ current: 0, total: 0, success: 0, failed: 0 });
+    progressRef.current = { current: 0, total: 0, success: 0, failed: 0 };
+    setRetryCounts({});
+    setProcessedMessages(new Set());
+  
+    try {
+      const batchData = await fetchDispatchBatch(dmsg_id);
+      let messages = prepareMessagesForDispatch(batchData);
       
-      for (const msg of currentBatch) {
-        if (processedMessages.has(msg.kc_id)) continue;
-
-        try {
-          await new Promise(resolve => setTimeout(resolve, MESSAGE_DELAY_MS));
-          
-          // Send the personalized message
-          const response = await sendMessage(accessToken, msg.kc_id, msg.body);
-          
-          if (response.success) {
-            setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-            setProgress(prev => ({
-              ...prev,
-              current: prev.current + 1,
-              success: prev.success + 1
-            }));
-          } else {
-            throw new Error("Message send failed");
-          }
-          
-          setRetryCounts(prev => ({
-            ...prev,
-            [msg.kc_id]: (prev[msg.kc_id] || 0) + 1
-          }));
-        } catch (err) {
-          if (attempt < MAX_RETRY_ATTEMPTS - 1) {
-            remainingMessages.push(msg);
-          } else {
-            setProgress(prev => ({
-              ...prev,
-              current: prev.current + 1,
-              failed: prev.failed + 1
-            }));
-          }
-          
-          setRetryCounts(prev => ({
-            ...prev,
-            [msg.kc_id]: (prev[msg.kc_id] || 0) + 1
-          }));
-        }
+      // Replace placeholders in message bodies
+      messages = messages.map(msg => ({
+        ...msg,
+        body: msg.body
+          .replace(/<kc_username>/g, msg.username)
+          .replace(/<fullname>/g, msg.fullname)
+      }));
+  
+      let remainingMessages = messages.filter(msg => !processedMessages.has(msg.kc_id));
+      let attempt = 0;
+  
+      setProgress(prev => ({
+        ...prev,
+        total: messages.length
+      }));
+  
+      while (remainingMessages.length > 0 && attempt < MAX_RETRY_ATTEMPTS) {
+        // ... (rest of the dispatch logic remains the same)
       }
-
-      attempt++;
+  
+      const finalStatus = await updateDispatchStatus(dmsg_id);
+      if (!finalStatus.success) {
+        throw new Error("Failed to update dispatch status");
+      }
+  
+      // Mark as completed in session storage
+      sessionStorage.setItem(`dispatch_completed_${dmsg_id}`, "done");
       
-      if (remainingMessages.length > 0 && attempt < MAX_RETRY_ATTEMPTS) {
-        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+      // Update URL parameter
+      if (window.history.pushState) {
+        const newUrl = new URL(window.location);
+        newUrl.searchParams.set('start_dispatch', '2');
+        window.history.pushState({}, '', newUrl);
+      }
+  
+      if (!dispatchId) {
+        alert(
+          `Processed ${messages.length} messages with ${MAX_RETRY_ATTEMPTS} attempts\n` +
+          `Success: ${progressRef.current.success}\n` +
+          `Failed: ${progressRef.current.failed}\n` +
+          `Total attempts: ${Object.values(retryCounts).reduce((a, b) => a + b, 0)}`
+        );
+      }
+    } catch (err) {
+      setError(`Dispatch failed: ${err.message}`);
+      console.error("Dispatch error:", err);
+    } finally {
+      setDispatching(false);
+    }
+  }, [accessToken, dispatchId, updateDispatchStatus, processedMessages, retryCounts]);
+
+  // Single dispatch trigger effect
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const dmsg_id = urlParams.get("dmsg_id");
+    const start = urlParams.get("start_dispatch");
+
+    if (isLoggedIn && dmsg_id && start === "1" && !dispatching) {
+      // Check session storage to prevent re-dispatch
+      if (sessionStorage.getItem(`dispatch_completed_${dmsg_id}`) !== "done") {
+        handleDispatch(dmsg_id);
       }
     }
+  }, [isLoggedIn, dispatching, handleDispatch]);
 
-    const finalStatus = await updateDispatchStatus(dmsg_id);
-    if (!finalStatus.success) {
-      throw new Error("Failed to update dispatch status");
-    }
-
-    if (!dispatchId) {
-      alert(
-        `Processed ${messages.length} messages with ${MAX_RETRY_ATTEMPTS} attempts\n` +
-        `Success: ${progressRef.current.success}\n` +
-        `Failed: ${progressRef.current.failed}\n` +
-        `Total attempts: ${Object.values(retryCounts).reduce((a, b) => a + b, 0)}`
-      );
-    }
-  } catch (err) {
-    setError(`Dispatch failed: ${err.message}`);
-    console.error("Dispatch error:", err);
-  } finally {
-    setDispatching(false);
-  }
-}, [accessToken, dispatchId, updateDispatchStatus, processedMessages,retryCounts]);
-
-// ... (rest of the component remains the same)
+  // ... (rest of the component remains the same)
+}

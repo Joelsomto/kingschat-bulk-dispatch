@@ -36,8 +36,12 @@ function App() {
     const dmsg_id = urlParams.get("dmsg_id");
     const start = urlParams.get("start_dispatch");
 
-    if (dmsg_id && start === "1") {
+    if (dmsg_id) {
       setDispatchId(dmsg_id);
+      // Only set to auto-dispatch if start_dispatch=1 and not completed
+      if (start === "1" && !sessionStorage.getItem(`dispatch_completed_${dmsg_id}`)) {
+        sessionStorage.setItem(`dispatch_completed_${dmsg_id}`, "in_progress");
+      }
     }
   }, []);
 
@@ -161,7 +165,6 @@ function App() {
 
   const [processedMessages, setProcessedMessages] = useState(new Set()); // Track processed messages
 
-  
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
@@ -253,6 +256,9 @@ function App() {
         window.history.pushState({}, '', newUrl);
       }
   
+      // Mark dispatch as completed in session storage
+      sessionStorage.setItem(`dispatch_completed_${dmsg_id}`, "completed");
+  
       if (!dispatchId) {
         alert(
           `Processed ${messages.length} messages with ${MAX_RETRY_ATTEMPTS} attempts\n` +
@@ -269,24 +275,23 @@ function App() {
     }
   }, [accessToken, dispatchId, updateDispatchStatus, processedMessages, retryCounts]);
   
-  // Modify the auto-start dispatch effect to check for status 2
+  // Auto-start dispatch when both logged in and ID is present
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get('dmsg_id');
     const start = urlParams.get('start_dispatch');
-  
-    // Only auto-start if status is 1 (not completed)
-    if (isLoggedIn && dmsg_id && start === '1' && !dispatching) {
+    
+    // Only auto-start if:
+    // 1. User is logged in
+    // 2. We have a dispatch ID
+    // 3. Not currently dispatching
+    // 4. start_dispatch is 1 (not 2 or something else)
+    // 5. Dispatch hasn't been marked as completed in session storage
+    if (isLoggedIn && dmsg_id && !dispatching && start === '1' && 
+        !sessionStorage.getItem(`dispatch_completed_${dmsg_id}`)) {
       handleDispatch(dmsg_id);
     }
   }, [isLoggedIn, dispatching, handleDispatch]);
-
-  // Auto-start dispatch when both logged in and ID is present
-  useEffect(() => {
-    if (isLoggedIn && dispatchId && !dispatching) {
-      handleDispatch(dispatchId);
-    }
-  }, [isLoggedIn, dispatchId, dispatching, handleDispatch]);
 
   return (
     <div style={{ padding: "20px", maxWidth: "500px", margin: "0 auto" }}>
