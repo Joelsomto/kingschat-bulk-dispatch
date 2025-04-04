@@ -478,7 +478,7 @@ import {
 } from "./services/dispatchService";
 
 // Constants
-const MAX_RETRY_ATTEMPTS = 2;
+const MAX_RETRY_ATTEMPTS = 1;
 const MESSAGE_DELAY_MS = 1000;
 const RETRY_DELAY_MS = 1000;
 
