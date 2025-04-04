@@ -503,6 +503,14 @@ function App() {
   const [processedMessages, setProcessedMessages] = useState(new Set());
   const progressRef = useRef(progress);
 
+  const updateProgress = (updateFn) => {
+    setProgress(prev => {
+      const updated = updateFn(prev);
+      progressRef.current = updated;
+      return updated;
+    });
+  };
+
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
@@ -626,8 +634,7 @@ function App() {
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
-    setProgress({ current: 0, total: 0, success: 0, failed: 0 });
-    progressRef.current = { current: 0, total: 0, success: 0, failed: 0 };
+    updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
     setRetryCounts({});
     setProcessedMessages(new Set());
 
@@ -645,7 +652,7 @@ function App() {
       let remainingMessages = messages;
       let attempt = 0;
 
-      setProgress(prev => ({ ...prev, total: messages.length }));
+      updateProgress(prev => ({ ...prev, total: messages.length }));
 
       while (remainingMessages.length > 0 && attempt < MAX_RETRY_ATTEMPTS) {
         const currentBatch = [...remainingMessages];
@@ -660,24 +667,26 @@ function App() {
 
             if (res.success) {
               setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-              setProgress(prev => ({
+              updateProgress(prev => ({
                 ...prev,
                 current: prev.current + 1,
                 success: prev.success + 1,
               }));
-            } else {
-              throw new Error("Send failed");
+              continue;
             }
-          } catch {
-            if (attempt < MAX_RETRY_ATTEMPTS - 1) {
-              remainingMessages.push(msg);
-            } else {
-              setProgress(prev => ({
-                ...prev,
-                current: prev.current + 1,
-                failed: prev.failed + 1,
-              }));
-            }
+          } catch (err) {
+            console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+          }
+
+          const currentRetry = retryCounts[msg.kc_id] || 0;
+          if (currentRetry + 1 < MAX_RETRY_ATTEMPTS) {
+            remainingMessages.push(msg);
+          } else {
+            updateProgress(prev => ({
+              ...prev,
+              current: prev.current + 1,
+              failed: prev.failed + 1,
+            }));
           }
 
           setRetryCounts(prev => ({
@@ -705,7 +714,7 @@ function App() {
     } finally {
       setDispatching(false);
     }
-  }, [accessToken, updateDispatchStatus, processedMessages]);
+  }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -742,7 +751,24 @@ function App() {
       </div>
     );
   };
-
+  const DispatchAnalytics = () => {
+    if (dispatching || !progress.total || progress.current !== progress.total) return null;
+  
+    return (
+      <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
+        <h4>Dispatch Summary</h4>
+        <p><strong>Total:</strong> {progress.total}</p>
+        <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
+        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p>
+        <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
+          Object.values(retryCounts).filter(count => count > 1).length
+        }</p>
+        <a href="https://kingslist.pro/app/default/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
+          Go to Messages Page
+        </a>
+      </div>
+    );
+  };
   return (
     <div style={{ padding: "30px", maxWidth: "600px", margin: "auto", fontFamily: "sans-serif" }}>
       <h2 style={{ color: "#2a2a2a" }}>Kingslist Portal</h2>
@@ -778,6 +804,8 @@ function App() {
               <ProgressBar />
             </div>
           )}
+
+          <DispatchAnalytics />
 
           {!dispatching && dispatchId && (
             <button
