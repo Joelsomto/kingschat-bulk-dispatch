@@ -1014,7 +1014,7 @@ function App() {
         MESSAGE_DELAY_MS: 1500, // Base delay between messages
         RETRY_DELAY_MS: 3000,   // Delay for retries
         BATCH_DELAY_MS: 5000,   // Delay after each batch
-        MAX_RETRY_ATTEMPTS: 2,  // Max retry attempts
+        MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
         BATCH_SIZE: 10          // Messages per batch
     };
 
