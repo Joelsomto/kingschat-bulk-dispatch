@@ -530,13 +530,14 @@ function App() {
         const { success, failed, rateLimited } = progressRef.current;
         const uniqueProcessed = processedMessages.size;
         const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
-
-        // Determine if dispatch should be marked as complete
-        const isComplete =
-          forceComplete ||
+  
+        const isComplete = forceComplete ||
           (uniqueProcessed >= progressRef.current.total && failed === 0) ||
           (failed > 0 && uniqueProcessed + failed >= progressRef.current.total);
-
+  
+        // Create new AbortController for this request
+        const statusAbortController = new AbortController();
+        
         const response = await fetch(
           "https://kingslist.pro/app/default/api/updateDispatchCount.php",
           {
@@ -547,13 +548,19 @@ function App() {
               dmsg_id,
               dispatch_count: uniqueProcessed,
               attempts: totalAttempts,
-              status: isComplete ? 2 : 1, // 2 = complete, 1 = in progress
+              status: isComplete ? 2 : 1,
               rate_limited: rateLimited,
             }),
-            signal: abortControllerRef.current.signal,
+            signal: statusAbortController.signal,
           }
         );
-
+  
+        // Check if request was aborted
+        if (statusAbortController.signal.aborted) {
+          addLog("Status update aborted", "warning");
+          return;
+        }
+  
         const data = await response.json();
         if (!data.success) throw new Error(data.error || "Failed to update status");
         
@@ -561,8 +568,11 @@ function App() {
                isComplete ? "success" : "info");
         return data;
       } catch (error) {
-        addLog(`Status update failed: ${error.message}`, "error");
-        console.error("Status update failed:", error);
+        // Only log if not an abort error
+        if (error.name !== 'AbortError') {
+          addLog(`Status update failed: ${error.message}`, "error");
+          console.error("Status update failed:", error);
+        }
         throw error;
       }
     },
@@ -573,6 +583,7 @@ function App() {
     async (dmsg_id) => {
       if (dispatching) return;
       
+      // Initialize dispatch state
       setError("");
       setDispatching(true);
       setPaused(false);
@@ -580,38 +591,44 @@ function App() {
       setRetryCounts({});
       setProcessedMessages(new Set());
       addLog(`Starting dispatch for message ID: ${dmsg_id}`);
-
+  
       try {
-        // Fetch batch data
-        const batchData = await fetchDispatchBatch(dmsg_id);
+        // Fetch batch data with abort control
+        const batchData = await fetchDispatchBatch(dmsg_id, abortControllerRef.current.signal);
         addLog(`Fetched batch data with ${batchData.messages?.length || 0} messages`);
         
-        // Use actual messages length since total_recipients might be incorrect
+        // Check for abort after fetch
+        if (abortControllerRef.current.signal.aborted) {
+          addLog("Dispatch aborted during data fetch", "warning");
+          return;
+        }
+  
         const totalMessages = batchData.messages?.length || 0;
         if (totalMessages === 0) {
           throw new Error("No messages available for dispatch");
         }
-
-        let messages = prepareMessagesForDispatch(batchData).map(msg => ({
+  
+        // Prepare messages with stable references
+        const messages = prepareMessagesForDispatch(batchData).map(msg => ({
           ...msg,
           body: msg.body
             .replace(/<kc_username>/g, msg.username)
             .replace(/<fullname>/g, msg.fullname),
         }));
-
+  
         updateProgress(prev => ({ ...prev, total: totalMessages }));
         addLog(`Prepared ${messages.length} messages for dispatch`);
-
+  
         let remainingMessages = [...messages];
-        let currentBatch = [];
         let attempt = 0;
-
-        // Main dispatch loop
+  
+        // Main dispatch loop with proper abort handling
         while (remainingMessages.length > 0 && !abortControllerRef.current.signal.aborted) {
+          // Handle pause state
           if (paused) {
             await new Promise(resolve => {
               const interval = setInterval(() => {
-                if (!paused) {
+                if (!paused || abortControllerRef.current.signal.aborted) {
                   clearInterval(interval);
                   resolve();
                 }
@@ -619,13 +636,13 @@ function App() {
             });
             continue;
           }
-
-          // Get next batch
-          currentBatch = remainingMessages.slice(0, RATE_LIMIT_CONFIG.BATCH_SIZE);
-          const batchToProcess = currentBatch;
+  
+          // Get next batch with stable reference
+          const currentBatch = remainingMessages.slice(0, RATE_LIMIT_CONFIG.BATCH_SIZE);
+          const batchToProcess = [...currentBatch]; // Create copy for stability
           remainingMessages = remainingMessages.slice(RATE_LIMIT_CONFIG.BATCH_SIZE);
-
-          // Update retry counts
+  
+          // Update retry counts safely
           setRetryCounts(prev => {
             const newCounts = { ...prev };
             batchToProcess.forEach(msg => {
@@ -633,26 +650,35 @@ function App() {
             });
             return newCounts;
           });
-
-          // Process current batch
-          for (const msg of currentBatch) {
-            if (processedMessages.has(msg.kc_id)) continue;
-            if (abortControllerRef.current.signal.aborted) break;
-
+  
+          // Process current batch with error handling
+          for (const msg of batchToProcess) {
+            if (processedMessages.has(msg.kc_id) || abortControllerRef.current.signal.aborted) {
+              continue;
+            }
+  
             const retryCount = retryCounts[msg.kc_id] || 0;
             const delay = calculateDelay(retryCount - 1);
-
+  
             try {
-              await new Promise(resolve => setTimeout(resolve, delay));
+              // Add delay with abort check
+              await new Promise((resolve, reject) => {
+                const timeout = setTimeout(resolve, delay);
+                abortControllerRef.current.signal.addEventListener('abort', () => {
+                  clearTimeout(timeout);
+                  reject(new DOMException('Aborted', 'AbortError'));
+                });
+              });
+  
               addLog(`Sending to ${msg.kc_id} (attempt ${retryCount})`, "info");
-
+  
               const res = await sendMessage(
                 accessToken,
                 msg.kc_id,
                 msg.body,
                 abortControllerRef.current.signal
               );
-
+  
               if (res.success) {
                 setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
                 updateProgress(prev => ({
@@ -664,69 +690,93 @@ function App() {
                 continue;
               }
             } catch (err) {
+              // Handle abort errors differently
+              if (err.name === 'AbortError') {
+                addLog("Dispatch aborted during message sending", "warning");
+                break;
+              }
+  
               const errorMsg = `Error sending to ${msg.kc_id}: ${err.message}`;
-              addLog(errorMsg, "error");
-              console.warn(errorMsg);
-
+              addLog(errorMsg, err.response?.status === 429 ? "warning" : "error");
+  
               if (err.response?.status === 429) {
                 updateProgress(prev => ({
                   ...prev,
                   rateLimited: prev.rateLimited + 1,
                 }));
-                addLog(`Rate limited for ${msg.kc_id}, will retry`, "warning");
+              }
+  
+              // Handle retry or failure
+              if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRY_ATTEMPTS) {
+                remainingMessages.unshift(msg);
+              } else {
+                updateProgress(prev => ({
+                  ...prev,
+                  current: prev.current + 1,
+                  failed: prev.failed + 1,
+                }));
+                addLog(`Max retries reached for ${msg.kc_id}`, "error");
               }
             }
-
-            // Handle retry or failure
-            if (retryCount < RATE_LIMIT_CONFIG.MAX_RETRY_ATTEMPTS) {
-              remainingMessages.unshift(msg); // Add back to front of queue
-            } else {
-              updateProgress(prev => ({
-                ...prev,
-                current: prev.current + 1,
-                failed: prev.failed + 1,
-              }));
-              addLog(`Max retries reached for ${msg.kc_id}`, "error");
+          }
+  
+          // Periodic status update with abort check
+          if (attempt % 3 === 0 && !abortControllerRef.current.signal.aborted) {
+            try {
+              await updateDispatchStatus(dmsg_id);
+            } catch (err) {
+              if (err.name !== 'AbortError') {
+                addLog(`Periodic status update failed: ${err.message}`, "error");
+              }
             }
           }
-
-          // Periodic status update
-          if (attempt % 3 === 0) {
-            await updateDispatchStatus(dmsg_id);
-          }
-
+  
           attempt++;
         }
-
-        // Final status update
-        const finalStatus = await updateDispatchStatus(dmsg_id, true);
-        if (!finalStatus.success) throw new Error("Final status update failed");
-
-        sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-        sessionStorage.setItem(
-          `dispatch_analytics_${dmsg_id}`,
-          JSON.stringify({
-            success: progressRef.current.success,
-            failed: progressRef.current.failed,
-            rateLimited: progressRef.current.rateLimited,
-            retries: Object.values(retryCounts).filter(c => c > 1).length,
-          })
-        );
-
-        addLog(
-          `Dispatch completed: ${progressRef.current.success} success, ${progressRef.current.failed} failed`,
-          progressRef.current.failed > 0 ? "warning" : "success"
-        );
-
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set("start_dispatch", "2");
-        window.history.pushState({}, "", newUrl.toString());
+  
+        // Final status update only if not aborted
+        if (!abortControllerRef.current.signal.aborted) {
+          try {
+            const finalStatus = await updateDispatchStatus(dmsg_id, true);
+            if (!finalStatus.success) {
+              throw new Error("Final status update failed");
+            }
+  
+            sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
+            sessionStorage.setItem(
+              `dispatch_analytics_${dmsg_id}`,
+              JSON.stringify({
+                success: progressRef.current.success,
+                failed: progressRef.current.failed,
+                rateLimited: progressRef.current.rateLimited,
+                retries: Object.values(retryCounts).filter(c => c > 1).length,
+              })
+            );
+  
+            addLog(
+              `Dispatch completed: ${progressRef.current.success} success, ${progressRef.current.failed} failed`,
+              progressRef.current.failed > 0 ? "warning" : "success"
+            );
+  
+            // Update URL only if dispatch completed successfully
+            const newUrl = new URL(window.location.href);
+            newUrl.searchParams.set("start_dispatch", "2");
+            window.history.pushState({}, "", newUrl.toString());
+          } catch (err) {
+            if (err.name !== 'AbortError') {
+              addLog(`Final status update error: ${err.message}`, "error");
+            }
+          }
+        }
       } catch (err) {
-        addLog(`Dispatch error: ${err.message}`, "error");
-        setError(`Dispatch error: ${err.message}`);
+        // Only show non-abort errors to user
+        if (err.name !== 'AbortError') {
+          addLog(`Dispatch error: ${err.message}`, "error");
+          setError(`Dispatch error: ${err.message}`);
+        }
       } finally {
         setDispatching(false);
-        abortControllerRef.current = new AbortController(); // Reset abort controller
+        // Don't reset abort controller here - let the cleanup effect handle it
       }
     },
     [accessToken, updateDispatchStatus, processedMessages, retryCounts, paused, dispatching]
@@ -743,10 +793,12 @@ function App() {
   };
 
   const handleCancel = () => {
+    addLog("Dispatch cancellation requested", "warning");
     abortControllerRef.current.abort();
     setDispatching(false);
     setPaused(false);
-    addLog("Dispatch cancelled by user", "error");
+    // Create new controller for future operations
+    abortControllerRef.current = new AbortController();
   };
 
   // Effects
@@ -802,8 +854,16 @@ function App() {
 
     verifySession();
   }, []);
-
-  // UI Components
+  useEffect(() => {
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+  
+    return () => {
+      // Abort all ongoing requests when component unmounts
+      controller.abort();
+    };
+  }, []);
+  // UI ComponentshandleCance
   const ProgressBar = () => {
     if (!progress.total) return null;
     const percent = (progress.current / progress.total) * 100;
