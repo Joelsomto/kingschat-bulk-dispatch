@@ -439,7 +439,7 @@ function App() {
   
   const progressRef = useRef(progress);
   const abortControllerRef = useRef(new AbortController());
-
+  const [dispatchInitiated, setDispatchInitiated] = useState(false);
   // Helper Functions
   const addLog = (message, type = "info") => {
     setLogs(prev => [
@@ -714,7 +714,10 @@ function App() {
         setError(`Dispatch error: ${err.message}`);
       }
     } finally {
-      setDispatching(false);
+      setDispatching(false);  
+      setDispatchInitiated(false); // Reset the initiated flag
+
+
     }
   }, [accessToken, updateDispatchStatus, processedMessages, retryCounts, paused, dispatching]);
 
@@ -741,17 +744,18 @@ function App() {
     const dmsg_id = urlParams.get("dmsg_id");
     const start = urlParams.get("start_dispatch");
     const status = sessionStorage.getItem(`dispatch_status_${dmsg_id}`);
-
-    if (isLoggedIn && dmsg_id && !dispatching && start === "1" && status !== "completed") {
+  
+    if (isLoggedIn && dmsg_id && !dispatching && start === "1" && status !== "completed" && !dispatchInitiated) {
       sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "in_progress");
+      setDispatchInitiated(true);
       handleDispatch(dmsg_id);
     }
-
+  
     return () => {
       abortControllerRef.current.abort();
     };
-  }, [isLoggedIn, dispatching, handleDispatch]);
-
+  }, [isLoggedIn, dispatching, handleDispatch, dispatchInitiated]);
+  
   useEffect(() => {
     const verifySession = async () => {
       const session = localStorage.getItem("kc_session");
