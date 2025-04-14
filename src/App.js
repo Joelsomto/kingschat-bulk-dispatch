@@ -30,7 +30,6 @@ function App() {
   const [retryCounts, setRetryCounts] = useState({});
   const [processedMessages, setProcessedMessages] = useState(new Set());
   const progressRef = useRef(progress);
-const [justLoggedIn, setJustLoggedIn] = useState(false);
 
   const updateProgress = (updateFn) => {
     setProgress(prev => {
@@ -63,7 +62,45 @@ const [justLoggedIn, setJustLoggedIn] = useState(false);
     }
   }, []);
 
- // Add handleDispatch to dependencies
+  // const handleLogin = useCallback(async () => {
+  //   setError("");
+  //   try {
+  //     const authResponse = await login();
+
+  //     const sessionData = {
+  //       accessToken: authResponse.accessToken,
+  //       refreshToken: authResponse.refreshToken || "",
+  //       expiresIn: authResponse.expiresIn || 3600,
+  //       timestamp: Date.now(),
+  //     };
+  //     localStorage.setItem("kc_session", JSON.stringify(sessionData));
+
+  //     setAccessToken(authResponse.accessToken);
+  //     setIsLoggedIn(true);
+
+  //     const form = document.createElement("form");
+  //     form.method = "POST";
+  //     form.action = "https://kingslist.pro/callback";
+
+  //     const addField = (name, value) => {
+  //       const input = document.createElement("input");
+  //       input.type = "hidden";
+  //       input.name = name;
+  //       input.value = value;
+  //       form.appendChild(input);
+  //     };
+
+  //     addField("accessToken", authResponse.accessToken);
+  //     addField("refreshToken", authResponse.refreshToken || "");
+  //     addField("expiresIn", authResponse.expiresIn || 3600);
+
+  //     document.body.appendChild(form);
+  //     form.submit();
+  //   } catch (err) {
+  //     setError("Failed to log in. Please try again.");
+  //     console.error("Login error:", err);
+  //   }
+  // }, []);
 
   useEffect(() => {
     const verifySession = async () => {
@@ -130,309 +167,188 @@ console.log(success);
     }
   }, [retryCounts, processedMessages]);
 
-// Move handleDispatch before handleLogin
-// const handleDispatch = useCallback(async (dmsg_id) => {
-//   setError("");
-//   setDispatching(true);
-//   updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
-//   setRetryCounts({});
-//   setProcessedMessages(new Set());
-//   resetMessageMetrics();
+  const handleDispatch = useCallback(async (dmsg_id) => {
+    setError("");
+    setDispatching(true);
+    updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
+    setRetryCounts({});
+    setProcessedMessages(new Set());
+    resetMessageMetrics();
 
-//   // Rate limiting configuration
-//   const RATE_LIMIT = {
-//     MESSAGE_DELAY_MS: 3000,
-//     RETRY_DELAY_MS: 3000,
-//     BATCH_DELAY_MS: 5000,
-//     MAX_RETRY_ATTEMPTS: 1,
-//     BATCH_SIZE: 10
-//   };
+    // Rate limiting configuration
+    const RATE_LIMIT = {
+        MESSAGE_DELAY_MS: 3000, // Base delay between messages
+        RETRY_DELAY_MS: 3000,   // Delay for retries
+        BATCH_DELAY_MS: 5000,   // Delay after each batch
+        MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
+        BATCH_SIZE: 10          // Messages per batch
+    };
 
-//   try {
-//     const batchData = await fetchDispatchBatch(dmsg_id);
-//     let messages = prepareMessagesForDispatch(batchData);
+    try {
+        const batchData = await fetchDispatchBatch(dmsg_id);
+        let messages = prepareMessagesForDispatch(batchData);
 
-//     messages = messages.map(msg => ({
-//       ...msg,
-//       body: msg.body
-//         .replace(/<kc_username>/g, msg.username)
-//         .replace(/<fullname>/g, msg.fullname),
-//     }));
+        messages = messages.map(msg => ({
+            ...msg,
+            body: msg.body
+                .replace(/<kc_username>/g, msg.username)
+                .replace(/<fullname>/g, msg.fullname),
+        }));
 
-//     let remainingMessages = messages;
-//     let attempt = 0;
+        let remainingMessages = messages;
+        let attempt = 0;
 
-//     updateProgress(prev => ({ ...prev, total: messages.length }));
+        updateProgress(prev => ({ ...prev, total: messages.length }));
 
-//     while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-//       const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
-//       remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
+        while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+            const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
+            remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
 
-//       setRetryCounts(prev => {
-//         const newCounts = { ...prev };
-//         currentBatch.forEach(msg => {
-//           if (!processedMessages.has(msg.kc_id)) {
-//             newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
-//           }
-//         });
-//         return newCounts;
-//       });
+            // Update retry counts
+            setRetryCounts(prev => {
+                const newCounts = { ...prev };
+                currentBatch.forEach(msg => {
+                    if (!processedMessages.has(msg.kc_id)) {
+                        newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
+                    }
+                });
+                return newCounts;
+            });
 
-//       for (const msg of currentBatch) {
-//         if (processedMessages.has(msg.kc_id)) continue;
+            // Process current batch
+            for (const msg of currentBatch) {
+                if (processedMessages.has(msg.kc_id)) continue;
 
-//         try {
-//           await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
-//           const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+                try {
+                    await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+                    const res = await sendMessage(accessToken, msg.kc_id, msg.body);
 
-//           if (res.success) {
-//             setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-//             updateProgress(prev => ({
-//               ...prev,
-//               current: prev.current + 1,
-//               success: prev.success + 1,
-//             }));
-//             continue;
-//           }
-//         } catch (err) {
-//           console.warn(`Error sending to ${msg.kc_id}:`, err.message);
-//         }
+                    if (res.success) {
+                        setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+                        updateProgress(prev => ({
+                            ...prev,
+                            current: prev.current + 1,
+                            success: prev.success + 1,
+                        }));
+                        continue;
+                    }
+                } catch (err) {
+                    console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+                }
 
-//         const currentRetry = retryCounts[msg.kc_id] || 0;
-//         if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-//           remainingMessages.push(msg);
-//         } else {
-//           updateProgress(prev => ({
-//             ...prev,
-//             current: prev.current + 1,
-//             failed: prev.failed + 1,
-//           }));
-//         }
-//       }
+                const currentRetry = retryCounts[msg.kc_id] || 0;
+                if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+                    remainingMessages.push(msg);
+                } else {
+                    updateProgress(prev => ({
+                        ...prev,
+                        current: prev.current + 1,
+                        failed: prev.failed + 1,
+                    }));
+                }
+            }
 
-//       attempt++;
-//       if (remainingMessages.length > 0) {
-//         const delayAttempt = attempt; 
-//         await new Promise(res => setTimeout(res, 
-//           delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
-//         ));
-//       }
-//     }
-
-//     const finalStatus = await updateDispatchStatus(dmsg_id);
-//     if (!finalStatus.success) throw new Error("Update failed");
-
-//     sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-//     sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
-//       success: progressRef.current.success,
-//       failed: progressRef.current.failed,
-//       retries: Object.values(retryCounts).filter(c => c > 1).length
-//     }));
-    
-//     const newUrl = new URL(window.location.href);
-//     newUrl.searchParams.set("start_dispatch", "2");
-//     window.history.pushState({}, "", newUrl.toString());
-
-//   } catch (err) {
-//     setError(`Dispatch error: ${err.message}`);
-//   } finally {
-//     setDispatching(false);
-//     setJustLoggedIn(false); // Reset the flag when dispatch completes
-//   }
-// }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
-
-const handleDispatch = useCallback(async (dmsg_id) => {
-  setError("");
-  setDispatching(true);
-  updateProgress({ current: 0, total: 0, success: 0, failed: 0 });
-  setRetryCounts({});
-  setProcessedMessages(new Set());
-  resetMessageMetrics();
-
-  // Rate limiting configuration
-  const RATE_LIMIT = {
-    MESSAGE_DELAY_MS: 3000,
-    RETRY_DELAY_MS: 3000,
-    BATCH_DELAY_MS: 5000,
-    MAX_RETRY_ATTEMPTS: 1,
-    BATCH_SIZE: 10
-  };
-
-  // Helper function for delay
-  const delay = (ms) => new Promise(res => setTimeout(res, ms));
-
-  try {
-    const batchData = await fetchDispatchBatch(dmsg_id);
-    let messages = prepareMessagesForDispatch(batchData).map(msg => ({
-      ...msg,
-      body: msg.body
-        .replace(/<kc_username>/g, msg.username)
-        .replace(/<fullname>/g, msg.fullname),
-    }));
-
-    updateProgress(prev => ({ ...prev, total: messages.length }));
-
-    const messageQueue = [...messages];
-    let attempt = 0;
-
-    while (messageQueue.length > 0 && attempt <= RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-      const currentBatch = messageQueue.splice(0, RATE_LIMIT.BATCH_SIZE);
-      const batchResults = [];
-
-      // Process batch in parallel
-      for (const msg of currentBatch) {
-        if (processedMessages.has(msg.kc_id)) continue;
-
-        try {
-          await delay(RATE_LIMIT.MESSAGE_DELAY_MS);
-          const res = await sendMessage(accessToken, msg.kc_id, msg.body);
-
-          if (res.success) {
-            setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-            updateProgress(prev => ({
-              ...prev,
-              current: prev.current + 1,
-              success: prev.success + 1,
-            }));
-            batchResults.push({ success: true, msg });
-            continue;
+            attempt++;
+            if (remainingMessages.length > 0) {
+              const delayAttempt = attempt; 
+              await new Promise(res => setTimeout(res, 
+                  delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
+              ));
           }
-        } catch (err) {
-          console.warn(`Error sending to ${msg.kc_id}:`, err.message);
         }
 
-        batchResults.push({ success: false, msg });
-      }
+        const finalStatus = await updateDispatchStatus(dmsg_id);
+        if (!finalStatus.success) throw new Error("Update failed");
 
-      // Handle retries
-      const failedMessages = batchResults
-        .filter(result => !result.success)
-        .map(result => result.msg);
-
-      setRetryCounts(prev => {
-        const newCounts = { ...prev };
-        failedMessages.forEach(msg => {
-          newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
-        });
-        return newCounts;
-      });
-
-      // Requeue failed messages if under retry limit
-      const requeueMessages = failedMessages.filter(msg => 
-        (retryCounts[msg.kc_id] || 0) < RATE_LIMIT.MAX_RETRY_ATTEMPTS
-      );
-      messageQueue.push(...requeueMessages);
-
-      // Mark permanently failed messages
-      const permanentFails = failedMessages.filter(msg => 
-        (retryCounts[msg.kc_id] || 0) >= RATE_LIMIT.MAX_RETRY_ATTEMPTS
-      );
-      if (permanentFails.length > 0) {
-        updateProgress(prev => ({
-          ...prev,
-          current: prev.current + permanentFails.length,
-          failed: prev.failed + permanentFails.length,
+        sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
+        sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
+            success: progressRef.current.success,
+            failed: progressRef.current.failed,
+            retries: Object.values(retryCounts).filter(c => c > 1).length
         }));
-      }
+        
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.set("start_dispatch", "2");
+        window.history.pushState({}, "", newUrl.toString());
 
-      attempt++;
-      if (messageQueue.length > 0) {
-        const delayTime = attempt === 1 
-          ? RATE_LIMIT.BATCH_DELAY_MS 
-          : RATE_LIMIT.RETRY_DELAY_MS;
-        await delay(delayTime);
-      }
+    } catch (err) {
+        setError(`Dispatch error: ${err.message}`);
+    } finally {
+        setDispatching(false);
     }
-
-    const finalStatus = await updateDispatchStatus(dmsg_id);
-    if (!finalStatus.success) throw new Error("Update failed");
-
-    sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-    sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
-      success: progressRef.current.success,
-      failed: progressRef.current.failed,
-      retries: Object.values(retryCounts).filter(c => c > 1).length
-    }));
-    
-    const newUrl = new URL(window.location.href);
-    newUrl.searchParams.set("start_dispatch", "2");
-    window.history.pushState({}, "", newUrl.toString());
-
-  } catch (err) {
-    setError(`Dispatch error: ${err.message}`);
-  } finally {
-    setDispatching(false);
-    setJustLoggedIn(false);
-  }
 }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
 
 const handleLogin = useCallback(async () => {
   setError("");
   try {
+    // Show loading state
+    setIsLoggedIn(false);
+    
+    // Attempt login
     const authResponse = await login();
-
+    
+    // Create session data
     const sessionData = {
       accessToken: authResponse.accessToken,
       refreshToken: authResponse.refreshToken || "",
       expiresIn: authResponse.expiresIn || 3600,
       timestamp: Date.now(),
     };
+    
+    // Store session
     localStorage.setItem("kc_session", JSON.stringify(sessionData));
-
     setAccessToken(authResponse.accessToken);
     setIsLoggedIn(true);
-    setJustLoggedIn(true);
 
+    // Check for dispatch ID in URL
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
     const startDispatch = urlParams.get("start_dispatch");
 
     if (dmsg_id && startDispatch === "1") {
+      // Start dispatch immediately without redirect
       handleDispatch(dmsg_id);
-    } else {
-      const form = document.createElement("form");
-      form.method = "POST";
-      form.action = "https://kingslist.pro/callback";
-
-      const addField = (name, value) => {
-        const input = document.createElement("input");
-        input.type = "hidden";
-        input.name = name;
-        input.value = value;
-        form.appendChild(input);
-      };
-
-      addField("accessToken", authResponse.accessToken);
-      addField("refreshToken", authResponse.refreshToken || "");
-      addField("expiresIn", authResponse.expiresIn || 3600);
-
-      document.body.appendChild(form);
-      form.submit();
+      return;
     }
+
+    // Default behavior - redirect with auth data
+    const redirectForm = document.createElement("form");
+    redirectForm.method = "POST";
+    redirectForm.action = "https://kingslist.pro/callback";
+
+    const addHiddenField = (name, value) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = name;
+      input.value = value;
+      redirectForm.appendChild(input);
+    };
+
+    addHiddenField("accessToken", authResponse.accessToken);
+    addHiddenField("refreshToken", authResponse.refreshToken || "");
+    addHiddenField("expiresIn", authResponse.expiresIn || 3600);
+
+    document.body.appendChild(redirectForm);
+    redirectForm.submit();
+
   } catch (err) {
-    setError("Failed to log in. Please try again.");
-    console.error("Login error:", err);
+    // Enhanced error handling
+    console.error("Login failed:", {
+      error: err,
+      message: err.message,
+      stack: err.stack
+    });
+    
+    setError(err.response?.data?.message || 
+            err.message || 
+            "Failed to log in. Please try again.");
+            
+    // Clear any partial session data
+    localStorage.removeItem("kc_session");
+    setAccessToken("");
+    setIsLoggedIn(false);
   }
-}, [handleDispatch]);
-
-// Update the useEffect to use justLoggedIn
-useEffect(() => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const dmsg_id = urlParams.get("dmsg_id");
-  const start = urlParams.get("start_dispatch");
-  const status = sessionStorage.getItem(`dispatch_status_${dmsg_id}`);
-
-  if (
-    isLoggedIn &&
-    dmsg_id &&
-    !dispatching &&
-    start === "1" &&
-    status === "in_progress" &&
-    !justLoggedIn  // Now properly using the justLoggedIn state
-  ) {
-    handleDispatch(dmsg_id);
-  }
-}, [isLoggedIn, dispatching, handleDispatch, justLoggedIn]);
+}, [handleDispatch]); // Added handleDispatch to dependencies
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -445,8 +361,7 @@ useEffect(() => {
       dmsg_id &&
       !dispatching &&
       start === "1" &&
-      status === "in_progress" &&
-      !window.justLoggedIn
+      status === "in_progress"
     ) {
       handleDispatch(dmsg_id);
     }
@@ -472,25 +387,34 @@ useEffect(() => {
   };
 
   const DispatchAnalytics = () => {
-    if (!progress.total) return null;
+    if (!progress.total || (dispatching && progress.current === 0)) return null;
     
+    // Get the message send metrics
     const messageMetrics = getMessageMetrics();
-    const totalProcessed = progress.success + progress.failed;
-    const pending = progress.total - totalProcessed;
   
     return (
       <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
+        {progress.current >= progress.total && (
+          <div style={{color: "#28a745", fontWeight: "bold", marginBottom: "10px"}}>
+            {progress.failed > 0 ? "Dispatch Completed with Errors" : "Dispatch Successfully Completed"}
+          </div>
+        )}
         <h4>Dispatch Summary</h4>
         <p><strong>Total:</strong> {progress.total}</p>
         <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
         <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p>
-        {pending > 0 && <p style={{ color: "#ffc107" }}><strong>Pending:</strong> {pending}</p>}
+        <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
+          Object.values(retryCounts).filter(count => count > 1).length
+        }</p>
         
-        <h4 style={{ marginTop: "15px" }}>API Call Metrics</h4>
-        <p><strong>Total API Calls:</strong> {messageMetrics.successCount + messageMetrics.errorCount}</p>
-        <p style={{ color: "#28a745" }}><strong>Successes:</strong> {messageMetrics.successCount}</p>
-        <p style={{ color: "#dc3545" }}><strong>Errors:</strong> {messageMetrics.errorCount}</p>
-        <p><strong>Success Rate:</strong> {Math.round((messageMetrics.successCount/(messageMetrics.successCount + messageMetrics.errorCount)) * 100)}%</p>
+        {/* Add the message send metrics */}
+        <h4 style={{ marginTop: "15px" }}>Message Send Metrics</h4>
+        <p style={{ color: "#28a745" }}><strong>API Successes:</strong> {messageMetrics.successCount}</p>
+        <p style={{ color: "#dc3545" }}><strong>API Errors:</strong> {messageMetrics.errorCount}</p>
+        
+        <a href="https://kingslist.pro/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
+          Go to Messages Page
+        </a>
       </div>
     );
   };
