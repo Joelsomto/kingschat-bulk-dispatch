@@ -138,55 +138,12 @@ function App() {
     verifySession();
   }, []);
 
-  // const updateDispatchStatus = useCallback(async (dmsg_id) => {
-  //   try {
-  //     const { success, failed } = progressRef.current;
-  //     const uniqueProcessed = processedMessages.size;
-  //     const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
-
-  //     const response = await fetch(
-  //       "https://kingslist.pro/app/default/api/updateDispatchCount.php",
-  //       {
-  //         method: "POST",
-  //         credentials: "include",
-  //         headers: { "Content-Type": "application/json" },
-  //         body: JSON.stringify({
-  //           dmsg_id,
-  //           dispatch_count: uniqueProcessed,
-  //           attempts: totalAttempts,
-  //           status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
-  //         }),
-  //       }
-  //     );
-
-  //     const data = await response.json();
-  //     if (!data.success) throw new Error(data.error || "Failed to update status");
-  //     return data;
-  //   } catch (error) {
-  //     console.error("Status update failed:", error);
-  //     throw error;
-  //   }
-  // }, [retryCounts, processedMessages]);
-
-
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
-      const { success, failed, total } = progressRef.current;
+      const { success, failed } = progressRef.current;
       const uniqueProcessed = processedMessages.size;
       const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
-  
-      // ✅ Log values for debugging
-      console.log("Dispatch Debug Info", {
-        dmsg_id,
-        uniqueProcessed,
-        totalAttempts,
-        failed,
-        total,
-        status: failed > 0 && uniqueProcessed < total ? 1 : 2,
-        processedMessages: Array.from(processedMessages),
-        retryCounts,
-      });
-  
+
       const response = await fetch(
         "https://kingslist.pro/app/default/api/updateDispatchCount.php",
         {
@@ -197,11 +154,11 @@ function App() {
             dmsg_id,
             dispatch_count: uniqueProcessed,
             attempts: totalAttempts,
-            status: failed > 0 && uniqueProcessed < total ? 1 : 2,
+            status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
           }),
         }
       );
-  
+
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Failed to update status");
       return data;
@@ -210,7 +167,7 @@ function App() {
       throw error;
     }
   }, [retryCounts, processedMessages]);
-  
+
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
