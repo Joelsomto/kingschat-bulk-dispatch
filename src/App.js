@@ -325,6 +325,7 @@ useEffect(() => {
     }
   }
 }, []);
+
 useEffect(() => {
   if (dispatchId && progress.success + progress.failed > 0) {
     sessionStorage.setItem(
@@ -337,6 +338,10 @@ useEffect(() => {
     );
   }
 }, [progress, dispatchId, retryCounts]);
+
+useEffect(() => {
+  progressRef.current = progress;
+}, [progress]);
 
   // Helper: Visual Progress Bar
   const ProgressBar = () => {
