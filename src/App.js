@@ -552,7 +552,10 @@ function App() {
   }, [retryCounts, processedMessages]);
 
   const handleDispatch = useCallback(async (dmsg_id) => {
-    if (dispatching) return;
+    if (dispatching || processedMessages.size > 0) {
+      addLog("Dispatch already in progress or partially completed", "warning");
+      return;
+    }
     
     setError("");
     setDispatching(true);
@@ -748,14 +751,22 @@ function App() {
     if (isLoggedIn && dmsg_id && !dispatching && start === "1" && status !== "completed" && !dispatchInitiated) {
       sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "in_progress");
       setDispatchInitiated(true);
-      handleDispatch(dmsg_id);
+      handleDispatch(dmsg_id).finally(() => {
+        // Reset only when dispatch completes or fails
+        setDispatchInitiated(false);
+      });
     }
   
     return () => {
-      abortControllerRef.current.abort();
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort("Component unmounted");
+      }
+      // Clear any ongoing state
+      setDispatching(false);
+      setPaused(false);
     };
   }, [isLoggedIn, dispatching, handleDispatch, dispatchInitiated]);
-  
+
   useEffect(() => {
     const verifySession = async () => {
       const session = localStorage.getItem("kc_session");
