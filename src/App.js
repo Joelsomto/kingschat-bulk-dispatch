@@ -62,45 +62,45 @@ function App() {
     }
   }, []);
 
-  // const handleLogin = useCallback(async () => {
-  //   setError("");
-  //   try {
-  //     const authResponse = await login();
+  const handleLogin = useCallback(async () => {
+    setError("");
+    try {
+      const authResponse = await login();
 
-  //     const sessionData = {
-  //       accessToken: authResponse.accessToken,
-  //       refreshToken: authResponse.refreshToken || "",
-  //       expiresIn: authResponse.expiresIn || 3600,
-  //       timestamp: Date.now(),
-  //     };
-  //     localStorage.setItem("kc_session", JSON.stringify(sessionData));
+      const sessionData = {
+        accessToken: authResponse.accessToken,
+        refreshToken: authResponse.refreshToken || "",
+        expiresIn: authResponse.expiresIn || 3600,
+        timestamp: Date.now(),
+      };
+      localStorage.setItem("kc_session", JSON.stringify(sessionData));
 
-  //     setAccessToken(authResponse.accessToken);
-  //     setIsLoggedIn(true);
+      setAccessToken(authResponse.accessToken);
+      setIsLoggedIn(true);
 
-  //     const form = document.createElement("form");
-  //     form.method = "POST";
-  //     form.action = "https://kingslist.pro/callback";
+      const form = document.createElement("form");
+      form.method = "POST";
+      form.action = "https://kingslist.pro/callback";
 
-  //     const addField = (name, value) => {
-  //       const input = document.createElement("input");
-  //       input.type = "hidden";
-  //       input.name = name;
-  //       input.value = value;
-  //       form.appendChild(input);
-  //     };
+      const addField = (name, value) => {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      };
 
-  //     addField("accessToken", authResponse.accessToken);
-  //     addField("refreshToken", authResponse.refreshToken || "");
-  //     addField("expiresIn", authResponse.expiresIn || 3600);
+      addField("accessToken", authResponse.accessToken);
+      addField("refreshToken", authResponse.refreshToken || "");
+      addField("expiresIn", authResponse.expiresIn || 3600);
 
-  //     document.body.appendChild(form);
-  //     form.submit();
-  //   } catch (err) {
-  //     setError("Failed to log in. Please try again.");
-  //     console.error("Login error:", err);
-  //   }
-  // }, []);
+      document.body.appendChild(form);
+      form.submit();
+    } catch (err) {
+      setError("Failed to log in. Please try again.");
+      console.error("Login error:", err);
+    }
+  }, []);
 
   useEffect(() => {
     const verifySession = async () => {
@@ -167,7 +167,7 @@ console.log(success);
     }
   }, [retryCounts, processedMessages]);
 
-  const handleDispatch = useCallback(async (dmsg_id, explicitAccessToken = null) => {
+  const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
     updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
@@ -175,22 +175,13 @@ console.log(success);
     setProcessedMessages(new Set());
     resetMessageMetrics();
 
-    // Use explicit token if provided, otherwise fall back to state
-    const effectiveAccessToken = explicitAccessToken || accessToken;
-    
-    if (!effectiveAccessToken) {
-        setError("No access token available for dispatch");
-        setDispatching(false);
-        return;
-    }
-
     // Rate limiting configuration
     const RATE_LIMIT = {
-        MESSAGE_DELAY_MS: 3000,
-        RETRY_DELAY_MS: 3000,
-        BATCH_DELAY_MS: 5000,
-        MAX_RETRY_ATTEMPTS: 1,
-        BATCH_SIZE: 10
+        MESSAGE_DELAY_MS: 3000, // Base delay between messages
+        RETRY_DELAY_MS: 3000,   // Delay for retries
+        BATCH_DELAY_MS: 5000,   // Delay after each batch
+        MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
+        BATCH_SIZE: 10          // Messages per batch
     };
 
     try {
@@ -230,7 +221,7 @@ console.log(success);
 
                 try {
                     await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
-                    const res = await sendMessage(effectiveAccessToken, msg.kc_id, msg.body);
+                    const res = await sendMessage(accessToken, msg.kc_id, msg.body);
 
                     if (res.success) {
                         setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
@@ -259,11 +250,11 @@ console.log(success);
 
             attempt++;
             if (remainingMessages.length > 0) {
-                const delayAttempt = attempt; 
-                await new Promise(res => setTimeout(res, 
-                    delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
-                ));
-            }
+              const delayAttempt = attempt; 
+              await new Promise(res => setTimeout(res, 
+                  delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
+              ));
+          }
         }
 
         const finalStatus = await updateDispatchStatus(dmsg_id);
@@ -287,83 +278,6 @@ console.log(success);
     }
 }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
 
-const handleLogin = useCallback(async () => {
-    setError("");
-    try {
-        // Show loading state
-        setIsLoggedIn(false);
-        
-        // Attempt login
-        const authResponse = await login();
-        
-        // Create session data
-        const sessionData = {
-            accessToken: authResponse.accessToken,
-            refreshToken: authResponse.refreshToken || "",
-            expiresIn: authResponse.expiresIn || 3600,
-            timestamp: Date.now(),
-        };
-        
-        // Store session
-        localStorage.setItem("kc_session", JSON.stringify(sessionData));
-        
-        // Update state
-        setAccessToken(authResponse.accessToken);
-        setIsLoggedIn(true);
-
-        // Check for dispatch ID in URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const dmsg_id = urlParams.get("dmsg_id");
-        const startDispatch = urlParams.get("start_dispatch");
-
-        if (dmsg_id && startDispatch === "1") {
-            // Verify accessToken is available before dispatch
-            if (!authResponse.accessToken) {
-                throw new Error("Access token not received");
-            }
-            
-            // Start dispatch with the fresh token we just received
-            await handleDispatch(dmsg_id, authResponse.accessToken);
-            return;
-        }
-
-        // Default behavior - redirect with auth data
-        const redirectForm = document.createElement("form");
-        redirectForm.method = "POST";
-        redirectForm.action = "https://kingslist.pro/callback";
-
-        const addHiddenField = (name, value) => {
-            const input = document.createElement("input");
-            input.type = "hidden";
-            input.name = name;
-            input.value = value;
-            redirectForm.appendChild(input);
-        };
-
-        addHiddenField("accessToken", authResponse.accessToken);
-        addHiddenField("refreshToken", authResponse.refreshToken || "");
-        addHiddenField("expiresIn", authResponse.expiresIn || 3600);
-
-        document.body.appendChild(redirectForm);
-        redirectForm.submit();
-
-    } catch (err) {
-        console.error("Login failed:", {
-            error: err,
-            message: err.message,
-            stack: err.stack
-        });
-        
-        setError(err.response?.data?.message || 
-                err.message || 
-                "Failed to log in. Please try again.");
-                
-        // Clear any partial session data
-        localStorage.removeItem("kc_session");
-        setAccessToken("");
-        setIsLoggedIn(false);
-    }
-}, [handleDispatch]);
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
