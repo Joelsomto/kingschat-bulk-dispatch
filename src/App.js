@@ -138,16 +138,55 @@ function App() {
     verifySession();
   }, []);
 
+  // const updateDispatchStatus = useCallback(async (dmsg_id) => {
+  //   try {
+  //     const { success, failed } = progressRef.current;
+  //     const uniqueProcessed = processedMessages.size;
+  //     const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
+
+  //     const response = await fetch(
+  //       "https://kingslist.pro/app/default/api/updateDispatchCount.php",
+  //       {
+  //         method: "POST",
+  //         credentials: "include",
+  //         headers: { "Content-Type": "application/json" },
+  //         body: JSON.stringify({
+  //           dmsg_id,
+  //           dispatch_count: uniqueProcessed,
+  //           attempts: totalAttempts,
+  //           status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
+  //         }),
+  //       }
+  //     );
+
+  //     const data = await response.json();
+  //     if (!data.success) throw new Error(data.error || "Failed to update status");
+  //     return data;
+  //   } catch (error) {
+  //     console.error("Status update failed:", error);
+  //     throw error;
+  //   }
+  // }, [retryCounts, processedMessages]);
+
+
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
-      const { success, failed } = progressRef.current;
+      const { success, failed, total } = progressRef.current;
       const uniqueProcessed = processedMessages.size;
-      const Processed = processedMessages;
-      console.log('processed count'.Processed);
-      console.log('uniqueProcessed count'.uniqueProcessed);
-
       const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
-
+  
+      // ✅ Log values for debugging
+      console.log("Dispatch Debug Info", {
+        dmsg_id,
+        uniqueProcessed,
+        totalAttempts,
+        failed,
+        total,
+        status: failed > 0 && uniqueProcessed < total ? 1 : 2,
+        processedMessages: Array.from(processedMessages),
+        retryCounts,
+      });
+  
       const response = await fetch(
         "https://kingslist.pro/app/default/api/updateDispatchCount.php",
         {
@@ -158,11 +197,11 @@ function App() {
             dmsg_id,
             dispatch_count: uniqueProcessed,
             attempts: totalAttempts,
-            status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
+            status: failed > 0 && uniqueProcessed < total ? 1 : 2,
           }),
         }
       );
-
+  
       const data = await response.json();
       if (!data.success) throw new Error(data.error || "Failed to update status");
       return data;
@@ -171,7 +210,7 @@ function App() {
       throw error;
     }
   }, [retryCounts, processedMessages]);
-
+  
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
     setDispatching(true);
@@ -205,60 +244,63 @@ function App() {
         updateProgress(prev => ({ ...prev, total: messages.length }));
 
         while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-            const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
-            remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
-
-            // Update retry counts
-            setRetryCounts(prev => {
-                const newCounts = { ...prev };
-                currentBatch.forEach(msg => {
-                    if (!processedMessages.has(msg.kc_id)) {
-                        newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
-                    }
-                });
-                return newCounts;
-            });
-
-            // Process current batch
-            for (const msg of currentBatch) {
-                if (processedMessages.has(msg.kc_id)) continue;
-
-                try {
-                    await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
-                    const res = await sendMessage(accessToken, msg.kc_id, msg.body);
-
-                    if (res.success) {
-                        setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-                        updateProgress(prev => ({
-                            ...prev,
-                            current: prev.current + 1,
-                            success: prev.success + 1,
-                        }));
-                        continue;
-                    }
-                } catch (err) {
-                    console.warn(`Error sending to ${msg.kc_id}:`, err.message);
-                }
-
-                const currentRetry = retryCounts[msg.kc_id] || 0;
-                if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-                    remainingMessages.push(msg);
-                } else {
-                    updateProgress(prev => ({
-                        ...prev,
-                        current: prev.current + 1,
-                        failed: prev.failed + 1,
-                    }));
-                }
-            }
-
-            attempt++;
-            if (remainingMessages.length > 0) {
-                await new Promise(res => setTimeout(res, 
-                    attempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
-                ));
-            }
-        }
+          const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
+          remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
+      
+          // Update retry counts
+          setRetryCounts(prev => {
+              const newCounts = { ...prev };
+              currentBatch.forEach(msg => {
+                  if (!processedMessages.has(msg.kc_id)) {
+                      newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
+                  }
+              });
+              return newCounts;
+          });
+      
+          // Process current batch
+          for (const msg of currentBatch) {
+              if (processedMessages.has(msg.kc_id)) continue;
+      
+              try {
+                  await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+                  const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+      
+                  if (res.success) {
+                      setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+                      updateProgress(prev => ({
+                          ...prev,
+                          current: prev.current + 1,
+                          success: prev.success + 1,
+                      }));
+                      continue;
+                  }
+              } catch (err) {
+                  console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+              }
+      
+              const currentRetry = retryCounts[msg.kc_id] || 0;
+              if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+                  remainingMessages.push(msg);
+              } else {
+                  updateProgress(prev => ({
+                      ...prev,
+                      current: prev.current + 1,
+                      failed: prev.failed + 1,
+                  }));
+              }
+          }
+      
+          attempt++;
+      
+          if (remainingMessages.length > 0) {
+              const delayAttempt = attempt; 
+              await new Promise(res => setTimeout(res, 
+                  delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
+              ));
+          }
+      }
+      
 
         const finalStatus = await updateDispatchStatus(dmsg_id);
         if (!finalStatus.success) throw new Error("Update failed");
