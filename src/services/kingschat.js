@@ -40,6 +40,43 @@ export const refreshToken = async (refreshToken) => {
   }
 };
 
+// export const sendMessage = async (accessToken, userIdentifier, message) => {
+//   try {
+//     console.log("Sending message to:", userIdentifier);
+//     console.log("Using access token:", accessToken.substring(0, 10) + "...");
+    
+//     const response = await kingsChatWebSdk.sendMessage({
+//       accessToken,
+//       userIdentifier,
+//       message,
+//     });
+    
+//     console.log("Message sent successfully");
+//     return response;
+//   } catch (error) {
+//     console.error("Message send failed:", {
+//       message: error.message,
+//       stack: error.stack,
+//       response: error.response
+//     });
+//     throw new Error(`Failed to send message: ${error.message || "Unknown error"}`);
+//   }
+// };
+
+// Metrics counters
+let successCount = 0;
+let errorCount = 0;
+
+export const getMessageMetrics = () => ({
+  successCount,
+  errorCount
+});
+
+export const resetMessageMetrics = () => {
+  successCount = 0;
+  errorCount = 0;
+};
+
 export const sendMessage = async (accessToken, userIdentifier, message) => {
   try {
     console.log("Sending message to:", userIdentifier);
@@ -51,9 +88,11 @@ export const sendMessage = async (accessToken, userIdentifier, message) => {
       message,
     });
     
+    successCount++;
     console.log("Message sent successfully");
     return response;
   } catch (error) {
+    errorCount++;
     console.error("Message send failed:", {
       message: error.message,
       stack: error.stack,

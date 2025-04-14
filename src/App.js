@@ -2,7 +2,7 @@
 
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { login, sendMessage } from "./services/kingschat";
+import { login, sendMessage, getMessageMetrics, resetMessageMetrics } from "./services/kingschat";
 import {
   fetchDispatchBatch,
   prepareMessagesForDispatch,
@@ -173,6 +173,7 @@ console.log(success);
     updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
     setRetryCounts({});
     setProcessedMessages(new Set());
+    resetMessageMetrics();
 
     // Rate limiting configuration
     const RATE_LIMIT = {
@@ -315,6 +316,9 @@ console.log(success);
 
   const DispatchAnalytics = () => {
     if (!progress.total || (dispatching && progress.current === 0)) return null;
+    
+    // Get the message send metrics
+    const messageMetrics = getMessageMetrics();
   
     return (
       <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
@@ -330,6 +334,12 @@ console.log(success);
         <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
           Object.values(retryCounts).filter(count => count > 1).length
         }</p>
+        
+        {/* Add the message send metrics */}
+        <h4 style={{ marginTop: "15px" }}>Message Send Metrics</h4>
+        <p style={{ color: "#28a745" }}><strong>API Successes:</strong> {messageMetrics.successCount}</p>
+        <p style={{ color: "#dc3545" }}><strong>API Errors:</strong> {messageMetrics.errorCount}</p>
+        
         <a href="https://kingslist.pro/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
           Go to Messages Page
         </a>
