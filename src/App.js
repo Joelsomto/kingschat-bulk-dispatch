@@ -297,8 +297,13 @@ const handleLogin = useCallback(async () => {
     
     // Store session
     localStorage.setItem("kc_session", JSON.stringify(sessionData));
+    
+    // IMPORTANT: Update state synchronously before any further operations
     setAccessToken(authResponse.accessToken);
     setIsLoggedIn(true);
+
+    // Force state update before proceeding
+    await new Promise(resolve => setTimeout(resolve, 0));
 
     // Check for dispatch ID in URL
     const urlParams = new URLSearchParams(window.location.search);
@@ -306,7 +311,12 @@ const handleLogin = useCallback(async () => {
     const startDispatch = urlParams.get("start_dispatch");
 
     if (dmsg_id && startDispatch === "1") {
-      // Start dispatch immediately without redirect
+      // Verify accessToken is available before dispatch
+      if (!authResponse.accessToken) {
+        throw new Error("Access token not received");
+      }
+      
+      // Start dispatch with the token we just received
       handleDispatch(dmsg_id);
       return;
     }
@@ -332,7 +342,6 @@ const handleLogin = useCallback(async () => {
     redirectForm.submit();
 
   } catch (err) {
-    // Enhanced error handling
     console.error("Login failed:", {
       error: err,
       message: err.message,
@@ -348,7 +357,7 @@ const handleLogin = useCallback(async () => {
     setAccessToken("");
     setIsLoggedIn(false);
   }
-}, [handleDispatch]); // Added handleDispatch to dependencies
+}, [handleDispatch]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
