@@ -57,11 +57,11 @@ function App() {
     }
 
     // Load saved analytics if available
-    const savedAnalytics = sessionStorage.getItem(`dispatch_analytics_${dmsg_id}`);
-    if (savedAnalytics) {
-      const { success, failed } = JSON.parse(savedAnalytics);
-      updateProgress(prev => ({ ...prev, success, failed }));
-    }
+    // const savedAnalytics = sessionStorage.getItem(`dispatch_analytics_${dmsg_id}`);
+    // if (savedAnalytics) {
+    //   const { success, failed } = JSON.parse(savedAnalytics);
+    //   updateProgress(prev => ({ ...prev, success, failed }));
+    // }
   }, []);
 
   const handleLogin = useCallback(async () => {
@@ -142,6 +142,8 @@ function App() {
     try {
       const { success, failed } = progressRef.current;
       const uniqueProcessed = processedMessages.size;
+      console.log(uniqueProcessed);
+      
       const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
 
       const response = await fetch(
@@ -152,7 +154,7 @@ function App() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             dmsg_id,
-            dispatch_count: uniqueProcessed,
+            dispatch_count: success,
             attempts: totalAttempts,
             status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
           }),
@@ -280,22 +282,61 @@ function App() {
     }
 }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
 
-  useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const dmsg_id = urlParams.get("dmsg_id");
-    const start = urlParams.get("start_dispatch");
+  // useEffect(() => {
+  //   const urlParams = new URLSearchParams(window.location.search);
+  //   const dmsg_id = urlParams.get("dmsg_id");
+  //   const start = urlParams.get("start_dispatch");
+  //   const status = sessionStorage.getItem(`dispatch_status_${dmsg_id}`);
+
+  //   if (
+  //     isLoggedIn &&
+  //     dmsg_id &&
+  //     !dispatching &&
+  //     start === "1" &&
+  //     status === "in_progress"
+  //   ) {
+  //     handleDispatch(dmsg_id);
+  //   }
+  // }, [isLoggedIn, dispatching, handleDispatch]);
+
+
+useEffect(() => {
+  const urlParams = new URLSearchParams(window.location.search);
+  const dmsg_id = urlParams.get("dmsg_id");
+  const start = urlParams.get("start_dispatch");
+
+  if (dmsg_id) {
+    setDispatchId(dmsg_id);
+
     const status = sessionStorage.getItem(`dispatch_status_${dmsg_id}`);
 
-    if (
-      isLoggedIn &&
-      dmsg_id &&
-      !dispatching &&
-      start === "1" &&
-      status === "in_progress"
-    ) {
-      handleDispatch(dmsg_id);
+    if (start === "1") {
+      if (!status || status !== "completed") {
+        sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "in_progress");
+      }
     }
-  }, [isLoggedIn, dispatching, handleDispatch]);
+
+    if (status === "completed") {
+      const savedAnalytics = sessionStorage.getItem(`dispatch_analytics_${dmsg_id}`);
+      if (savedAnalytics) {
+        const { success, failed } = JSON.parse(savedAnalytics);
+        updateProgress(prev => ({ ...prev, success, failed }));
+      }
+    }
+  }
+}, []);
+useEffect(() => {
+  if (dispatchId && progress.success + progress.failed > 0) {
+    sessionStorage.setItem(
+      `dispatch_analytics_${dispatchId}`,
+      JSON.stringify({
+        success: progress.success,
+        failed: progress.failed,
+        retries: Object.values(retryCounts).filter(c => c > 1).length
+      })
+    );
+  }
+}, [progress, dispatchId, retryCounts]);
 
   // Helper: Visual Progress Bar
   const ProgressBar = () => {
