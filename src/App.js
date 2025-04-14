@@ -7,10 +7,10 @@ import {
   prepareMessagesForDispatch,
 } from "./services/dispatchService";
 
-// Constants
-const MAX_RETRY_ATTEMPTS = 1;
-const MESSAGE_DELAY_MS = 1000;
-const RETRY_DELAY_MS = 1000;
+// // Constants
+// const MAX_RETRY_ATTEMPTS = 1;
+// const MESSAGE_DELAY_MS = 1000;
+// const RETRY_DELAY_MS = 1000;
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
@@ -142,6 +142,10 @@ function App() {
     try {
       const { success, failed } = progressRef.current;
       const uniqueProcessed = processedMessages.size;
+      const Processed = processedMessages;
+      console.log('processed count'.Processed);
+      console.log('uniqueProcessed count'.uniqueProcessed);
+
       const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
 
       const response = await fetch(
