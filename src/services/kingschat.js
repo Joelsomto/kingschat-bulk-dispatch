@@ -83,6 +83,7 @@ export const sendMessage = async (accessToken, userIdentifier, message) => {
   try {
     console.log("Sending message to:", userIdentifier);
     console.log("Using access token:", accessToken.substring(0, 10) + "...");
+    console.log(`Message: ${message.substring(0, 50)}...`);
     
     const response = await kingsChatWebSdk.sendMessage({
       accessToken,
@@ -92,11 +93,12 @@ export const sendMessage = async (accessToken, userIdentifier, message) => {
     
     successCount++;
     console.log(`Message sent successfully. Total successes: ${successCount}`);
+    console.log(`[Success #${successCount}] ${userIdentifier}`);
     console.log("Message sent successfully");
     return response;
   } catch (error) {
     errorCount++;
-    console.error(`Message send failed. Total errors: ${errorCount}`, {
+    console.error(`Message send failed. Total errors: ${errorCount} [Error #${errorCount}] ${userIdentifier}:`, {
       message: error.message,
       stack: error.stack,
       response: error.response

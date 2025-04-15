@@ -168,115 +168,260 @@ function App() {
     }
   }, [retryCounts]);
 
-  const handleDispatch = useCallback(async (dmsg_id) => {
-    setError("");
-    setDispatching(true);
-    updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
-    setRetryCounts({});
-    setProcessedMessages(new Set());
-    resetMessageMetrics();
+//   const handleDispatch = useCallback(async (dmsg_id) => {
+//     setError("");
+//     setDispatching(true);
+//     updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
+//     setRetryCounts({});
+//     setProcessedMessages(new Set());
+//     resetMessageMetrics();
 
-    // Rate limiting configuration
-    const RATE_LIMIT = {
-        MESSAGE_DELAY_MS: 3000, // Base delay between messages
-        RETRY_DELAY_MS: 3000,   // Delay for retries
-        BATCH_DELAY_MS: 5000,   // Delay after each batch
-        MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
-        BATCH_SIZE: 10          // Messages per batch
+//     // Rate limiting configuration
+//     const RATE_LIMIT = {
+//         MESSAGE_DELAY_MS: 3000, // Base delay between messages
+//         RETRY_DELAY_MS: 3000,   // Delay for retries
+//         BATCH_DELAY_MS: 5000,   // Delay after each batch
+//         MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
+//         BATCH_SIZE: 10          // Messages per batch
+//     };
+
+//     try {
+//         const batchData = await fetchDispatchBatch(dmsg_id);
+//         let messages = prepareMessagesForDispatch(batchData);
+
+//         messages = messages.map(msg => ({
+//             ...msg,
+//             body: msg.body
+//                 .replace(/<kc_username>/g, msg.username)
+//                 .replace(/<fullname>/g, msg.fullname),
+//         }));
+
+//         let remainingMessages = messages;
+//         let attempt = 0;
+
+//         updateProgress(prev => ({ ...prev, total: messages.length }));
+
+//         while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+//             const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
+//             remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
+
+//             // Update retry counts
+//             setRetryCounts(prev => {
+//                 const newCounts = { ...prev };
+//                 currentBatch.forEach(msg => {
+//                     if (!processedMessages.has(msg.kc_id)) {
+//                         newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
+//                     }
+//                 });
+//                 return newCounts;
+//             });
+
+//             // Process current batch
+//             for (const msg of currentBatch) {
+//                 if (processedMessages.has(msg.kc_id)) continue;
+
+//                 try {
+//                     await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+//                     const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+
+//                     if (res.success) {
+//                         setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+//                         updateProgress(prev => ({
+//                             ...prev,
+//                             current: prev.current + 1,
+//                             success: prev.success + 1,
+//                         }));
+//                         continue;
+//                     }
+//                 } catch (err) {
+//                     console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+//                 }
+
+//                 const currentRetry = retryCounts[msg.kc_id] || 0;
+//                 if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+//                     remainingMessages.push(msg);
+//                 } else {
+//                     updateProgress(prev => ({
+//                         ...prev,
+//                         current: prev.current + 1,
+//                         failed: prev.failed + 1,
+//                     }));
+//                 }
+//             }
+
+//             attempt++;
+//             if (remainingMessages.length > 0) {
+//               const delayAttempt = attempt; 
+//               await new Promise(res => setTimeout(res, 
+//                   delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
+//               ));
+//           }
+//         }
+
+//         const finalStatus = await updateDispatchStatus(dmsg_id);
+//         if (!finalStatus.success) throw new Error("Update failed");
+
+//         sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
+//         sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
+//             success: progressRef.current.success,
+//             failed: progressRef.current.failed,
+//             retries: Object.values(retryCounts).filter(c => c > 1).length
+//         }));
+        
+//         const newUrl = new URL(window.location.href);
+//         newUrl.searchParams.set("start_dispatch", "2");
+//         window.history.pushState({}, "", newUrl.toString());
+
+//     } catch (err) {
+//         setError(`Dispatch error: ${err.message}`);
+//     } finally {
+//         setDispatching(false);
+//     }
+// }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
+const handleDispatch = useCallback(async (dmsg_id) => {
+  setError("");
+  setDispatching(true);
+  updateProgress({ current: 0, total: 0, success: 0, failed: 0 });
+  setRetryCounts({});
+  setProcessedMessages(new Set());
+  resetMessageMetrics();
+
+  // Enhanced rate limiting configuration
+  const RATE_LIMIT = {
+    MESSAGE_DELAY_MS: 2000,
+    RETRY_DELAY_MS: 5000,
+    BATCH_DELAY_MS: 10000,
+    MAX_RETRY_ATTEMPTS: 2,
+    BATCH_SIZE: 5,
+    MAX_PARALLEL: 3
+  };
+
+  try {
+    const batchData = await fetchDispatchBatch(dmsg_id);
+    let messages = prepareMessagesForDispatch(batchData).map(msg => ({
+      ...msg,
+      body: msg.body.replace(/<kc_username>/g, msg.username)
+                   .replace(/<fullname>/g, msg.fullname)
+    }));
+
+    updateProgress(prev => ({ ...prev, total: messages.length }));
+
+    const processSingleMessage = async (msg, currentAttempt) => {
+      try {
+        await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+        const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+        
+        if (res.success) {
+          setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+          updateProgress(prev => ({
+            ...prev,
+            current: prev.current + 1,
+            success: prev.success + 1,
+          }));
+          return true;
+        }
+      } catch (err) {
+        console.warn(`Attempt ${currentAttempt+1} failed for ${msg.kc_id}:`, err.message);
+      }
+      return false;
     };
 
-    try {
-        const batchData = await fetchDispatchBatch(dmsg_id);
-        let messages = prepareMessagesForDispatch(batchData);
-
-        messages = messages.map(msg => ({
-            ...msg,
-            body: msg.body
-                .replace(/<kc_username>/g, msg.username)
-                .replace(/<fullname>/g, msg.fullname),
-        }));
-
-        let remainingMessages = messages;
-        let attempt = 0;
-
-        updateProgress(prev => ({ ...prev, total: messages.length }));
-
-        while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-            const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
-            remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
-
-            // Update retry counts
-            setRetryCounts(prev => {
-                const newCounts = { ...prev };
-                currentBatch.forEach(msg => {
-                    if (!processedMessages.has(msg.kc_id)) {
-                        newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
-                    }
-                });
-                return newCounts;
-            });
-
-            // Process current batch
-            for (const msg of currentBatch) {
-                if (processedMessages.has(msg.kc_id)) continue;
-
-                try {
-                    await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
-                    const res = await sendMessage(accessToken, msg.kc_id, msg.body);
-
-                    if (res.success) {
-                        setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
-                        updateProgress(prev => ({
-                            ...prev,
-                            current: prev.current + 1,
-                            success: prev.success + 1,
-                        }));
-                        continue;
-                    }
-                } catch (err) {
-                    console.warn(`Error sending to ${msg.kc_id}:`, err.message);
-                }
-
-                const currentRetry = retryCounts[msg.kc_id] || 0;
-                if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-                    remainingMessages.push(msg);
-                } else {
-                    updateProgress(prev => ({
-                        ...prev,
-                        current: prev.current + 1,
-                        failed: prev.failed + 1,
-                    }));
-                }
+    const processMessageBatch = async (batch, currentAttempt) => {
+      const parallelSlots = Math.min(RATE_LIMIT.MAX_PARALLEL, batch.length);
+      const slotPromises = [];
+      
+      for (let slotIndex = 0; slotIndex < parallelSlots; slotIndex++) {
+        slotPromises.push(
+          (async () => {
+            for (let msgIndex = slotIndex; msgIndex < batch.length; msgIndex += parallelSlots) {
+              const msg = batch[msgIndex];
+              if (processedMessages.has(msg.kc_id)) continue;
+              
+              const success = await processSingleMessage(msg, currentAttempt);
+              if (!success) {
+                return msg; // Return message for requeue
+              }
             }
+            return null;
+          })()
+        );
+      }
+      
+      const results = await Promise.all(slotPromises);
+      return results.filter(msg => msg !== null);
+    };
 
-            attempt++;
-            if (remainingMessages.length > 0) {
-              const delayAttempt = attempt; 
-              await new Promise(res => setTimeout(res, 
-                  delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
-              ));
-          }
-        }
+    let messageQueue = [...messages];
+    let attempt = 0;
 
-        const finalStatus = await updateDispatchStatus(dmsg_id);
-        if (!finalStatus.success) throw new Error("Update failed");
+    while (messageQueue.length > 0 && attempt <= RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+      const currentBatch = messageQueue.splice(0, RATE_LIMIT.BATCH_SIZE);
+      const failedMessages = await processMessageBatch(currentBatch, attempt);
+      
+      if (failedMessages.length > 0) {
+        failedMessages.forEach(msg => {
+          setRetryCounts(prev => ({
+            ...prev,
+            [msg.kc_id]: (prev[msg.kc_id] || 0) + 1
+          }));
+        });
+        messageQueue.push(...failedMessages);
+      }
 
-        sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-        sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
-            success: progressRef.current.success,
-            failed: progressRef.current.failed,
-            retries: Object.values(retryCounts).filter(c => c > 1).length
-        }));
-        
-        const newUrl = new URL(window.location.href);
-        newUrl.searchParams.set("start_dispatch", "2");
-        window.history.pushState({}, "", newUrl.toString());
-
-    } catch (err) {
-        setError(`Dispatch error: ${err.message}`);
-    } finally {
-        setDispatching(false);
+      attempt++;
+      if (messageQueue.length > 0) {
+        const delayTime = attempt === 1 
+          ? RATE_LIMIT.BATCH_DELAY_MS 
+          : RATE_LIMIT.RETRY_DELAY_MS;
+        await new Promise(res => setTimeout(res, delayTime));
+      }
     }
+
+    // Handle final failed messages
+    const permanentFails = messageQueue.filter(msg => 
+      (retryCounts[msg.kc_id] || 0) >= RATE_LIMIT.MAX_RETRY_ATTEMPTS
+    );
+    
+    if (permanentFails.length > 0) {
+      updateProgress(prev => ({
+        ...prev,
+        current: prev.current + permanentFails.length,
+        failed: prev.failed + permanentFails.length,
+      }));
+    }
+
+    // Final status update
+    const finalStatus = await updateDispatchStatus(dmsg_id);
+    if (!finalStatus.success) throw new Error("Update failed");
+
+    // Enhanced analytics
+    const metrics = getMessageMetrics();
+    sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
+      users: {
+        total: messages.length,
+        success: progressRef.current.success,
+        failed: progressRef.current.failed
+      },
+      api: {
+        calls: metrics.successCount + metrics.errorCount,
+        successes: metrics.successCount,
+        errors: metrics.errorCount,
+        successRate: Math.round((metrics.successCount / (metrics.successCount + metrics.errorCount)) * 100 || 0)
+      },
+      retries: Object.values(retryCounts).filter(c => c > 1).length
+    }));
+
+    // Update URL
+    const newUrl = new URL(window.location.href);
+    newUrl.searchParams.set("start_dispatch", "2");
+    window.history.pushState({}, "", newUrl.toString());
+
+  } catch (err) {
+    setError(`Dispatch error: ${err.message}`);
+    console.error('Dispatch failed:', err);
+  } finally {
+    setDispatching(false);
+  }
 }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
 
   useEffect(() => {
