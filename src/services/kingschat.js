@@ -69,7 +69,9 @@ let errorCount = 0;
 
 export const getMessageMetrics = () => ({
   successCount,
-  errorCount
+  errorCount,
+  totalProcessed: successCount + errorCount,
+  successRate: successCount > 0 ? (successCount/(successCount + errorCount)) * 100 : 0
 });
 
 export const resetMessageMetrics = () => {
