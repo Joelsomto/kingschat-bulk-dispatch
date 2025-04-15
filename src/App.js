@@ -332,16 +332,16 @@ console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors:
         )}
         <h4>Dispatch Summary</h4>
         <p><strong>Total:</strong> {progress.total}</p>
-        <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
-        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p>
+        {/* <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
+        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p> */}
         <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
           Object.values(retryCounts).filter(count => count > 1).length
         }</p>
         
         {/* Add the message send metrics */}
         <h4 style={{ marginTop: "15px" }}>Message Send Metrics</h4>
-        <p style={{ color: "#28a745" }}><strong>API Successes:</strong> {messageMetrics.successCount}</p>
-        <p style={{ color: "#dc3545" }}><strong>API Errors:</strong> {messageMetrics.errorCount}</p>
+        <p style={{ color: "#28a745" }}><strong> Successes:</strong> {messageMetrics.successCount}</p>
+        <p style={{ color: "#dc3545" }}><strong> Errors:</strong> {messageMetrics.errorCount}</p>
         
         <a href="https://kingslist.pro/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
           Go to Messages Page
