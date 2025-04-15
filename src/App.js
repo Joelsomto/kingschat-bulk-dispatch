@@ -138,11 +138,12 @@ function App() {
 
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
-      const { success, failed } = progressRef.current;
-      const uniqueProcessed = processedMessages.size;
-      const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
-console.log(success);
+      const {  failed } = progressRef.current;
+      const messageMetrics = getMessageMetrics();
+      const uniqueProcessed = messageMetrics.successCount + messageMetrics.errorCount;
+    const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
 
+    
       const response = await fetch(
         "https://kingslist.pro/app/default/api/updateDispatchCount.php",
         {
@@ -165,7 +166,7 @@ console.log(success);
       console.error("Status update failed:", error);
       throw error;
     }
-  }, [retryCounts, processedMessages]);
+  }, [retryCounts]);
 
   const handleDispatch = useCallback(async (dmsg_id) => {
     setError("");
@@ -319,6 +320,8 @@ console.log(success);
     
     // Get the message send metrics
     const messageMetrics = getMessageMetrics();
+    const metrics = getMessageMetrics();
+console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors: ${metrics.errorCount}`);
   
     return (
       <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
