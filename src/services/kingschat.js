@@ -89,11 +89,12 @@ export const sendMessage = async (accessToken, userIdentifier, message) => {
     });
     
     successCount++;
-    console.log("Message sent successfully".successCount++);
+    console.log(`Message sent successfully. Total successes: ${successCount}`);
+    console.log("Message sent successfully");
     return response;
   } catch (error) {
     errorCount++;
-    console.error("Message send failed:".errorCount++, {
+    console.error(`Message send failed. Total errors: ${errorCount}`, {
       message: error.message,
       stack: error.stack,
       response: error.response
