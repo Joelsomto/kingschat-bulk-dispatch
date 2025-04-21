@@ -12,12 +12,15 @@ import {
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    return localStorage.getItem("kc_session") !== null;
+    const session = localStorage.getItem("kc_session");
+    return session ? JSON.parse(session).accessToken : false;
   });
+  
   const [accessToken, setAccessToken] = useState(() => {
     const session = localStorage.getItem("kc_session");
     return session ? JSON.parse(session).accessToken : "";
   });
+
   const [dispatching, setDispatching] = useState(false);
   const [error, setError] = useState("");
   const [dispatchId, setDispatchId] = useState("");
@@ -164,54 +167,103 @@ function App() {
   }, []);
 
  
+
+// In your App component
+
+
+// Persistent session checker
+useEffect(() => {
+  const checkSession = async () => {
+    const session = localStorage.getItem("kc_session");
+    if (!session) return;
+
+    try {
+      const sessionData = JSON.parse(session);
+      const now = Date.now();
+      const expiresAt = sessionData.timestamp + (sessionData.expiresIn * 1000);
+      
+      // Refresh token if it's expired or about to expire (within 5 minutes)
+      if (now >= expiresAt - 300000) {
+        const newToken = await refreshToken(sessionData.refreshToken);
+        const updatedSession = {
+          ...sessionData,
+          accessToken: newToken.accessToken,
+          refreshToken: newToken.refreshToken || sessionData.refreshToken,
+          timestamp: Date.now()
+        };
+        localStorage.setItem("kc_session", JSON.stringify(updatedSession));
+        setAccessToken(newToken.accessToken);
+      }
+      
+      setIsLoggedIn(true);
+    } catch (error) {
+      console.error("Session check failed:", error);
+      localStorage.removeItem("kc_session");
+      setIsLoggedIn(false);
+    }
+  };
+
+  // Check session every minute
+  const interval = setInterval(checkSession, 60000);
+  checkSession(); // Initial check
+  return () => clearInterval(interval);
+}, []);
+
   
   // Memoize sendMessageWithTokenRecovery to prevent recreation on every render
-  const sendMessageWithTokenRecovery = useCallback(async (msg, dmsg_id) => {
-    let currentToken = accessToken;
-    let retries = 0;
-    const maxRetries = 2;
-  
-    while (retries < maxRetries) {
-      try {
-        await new Promise(res => setTimeout(res, 500)); // Small delay between sends
-        const result = await sendMessage(currentToken, msg.kc_id, msg.body);
-        return result;
-      } catch (error) {
-        if (error.message.includes('token') || error.message.includes('expired')) {
-          console.log('Token expired, attempting refresh...');
-          try {
-            const session = JSON.parse(localStorage.getItem("kc_session"));
-            const newToken = await refreshToken(session.refreshToken);
-            
-            const updatedSession = {
-              ...session,
-              accessToken: newToken.accessToken,
-              refreshToken: newToken.refreshToken || session.refreshToken,
-              timestamp: Date.now()
-            };
-            
-            localStorage.setItem("kc_session", JSON.stringify(updatedSession));
-            setAccessToken(newToken.accessToken);
-            currentToken = newToken.accessToken;
-            retries++;
-          } catch (refreshError) {
-            console.error('Token refresh failed:', refreshError);
-            throw error;
+// Enhanced token refresh interceptor
+const sendMessageWithTokenRecovery = useCallback(async (msg, dmsg_id) => {
+  let currentToken = accessToken;
+  let retries = 0;
+  const maxRetries = 3; // Increased retry attempts
+
+  while (retries < maxRetries) {
+    try {
+      await new Promise(res => setTimeout(res, 500));
+      const result = await sendMessage(currentToken, msg.kc_id, msg.body);
+      return result;
+    } catch (error) {
+      if (error.message.includes('token') || error.message.includes('expired')) {
+        console.log('Token expired, attempting refresh...');
+        try {
+          const session = JSON.parse(localStorage.getItem("kc_session"));
+          if (!session?.refreshToken) throw new Error("No refresh token available");
+          
+          const newToken = await refreshToken(session.refreshToken);
+          const updatedSession = {
+            ...session,
+            accessToken: newToken.accessToken,
+            refreshToken: newToken.refreshToken || session.refreshToken,
+            timestamp: Date.now()
+          };
+          
+          localStorage.setItem("kc_session", JSON.stringify(updatedSession));
+          setAccessToken(newToken.accessToken);
+          currentToken = newToken.accessToken;
+          retries++;
+          continue; // Retry with new token
+        } catch (refreshError) {
+          console.error('Token refresh failed:', refreshError);
+          if (retries === maxRetries - 1) {
+            // Last attempt failed - mark message as failed but keep session
+            errorCount++;
+            throw new Error(`Final attempt failed after token refresh`);
           }
-        } else {
-          throw error;
         }
       }
+      throw error; // Re-throw other errors
     }
-    throw new Error('Failed after token refresh attempts');
-  }, [accessToken]); // Only depends on accessToken
+  }
+  throw new Error(`Max retries (${maxRetries}) exceeded`);
+}, [accessToken]);
+
   
   // Memoize processMessagesWithRetry with all required dependencies
   const processMessagesWithRetry = useCallback(async (messages, dmsg_id, isRetry) => {
     const RATE_LIMIT = {
       MESSAGE_DELAY_MS: 2000,
       BATCH_SIZE: 5,
-      MAX_RETRY_ATTEMPTS: 2
+      MAX_RETRY_ATTEMPTS: 3
     };
   
     let remainingMessages = [...messages];
@@ -221,7 +273,6 @@ function App() {
       const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
       remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
   
-      // Process batch with token recovery
       const results = await Promise.allSettled(
         currentBatch.map(msg => 
           sendMessageWithTokenRecovery(msg, dmsg_id)
@@ -230,16 +281,12 @@ function App() {
         )
       );
   
-      // Update processed messages and retry counts
+      // Update state
       const successful = results.filter(r => r.value.success);
       const failed = results.filter(r => !r.value.success);
   
-      setProcessedMessages(prev => {
-        const newSet = new Set(prev);
-        successful.forEach(({ value }) => newSet.add(value.msg.kc_id));
-        return newSet;
-      });
-  
+      setProcessedMessages(prev => new Set([...prev, ...successful.map(s => s.value.msg.kc_id)]));
+      
       setRetryCounts(prev => {
         const newCounts = { ...prev };
         currentBatch.forEach(msg => {
@@ -248,14 +295,14 @@ function App() {
         return newCounts;
       });
   
-      // Update progress from metrics
+      // Update progress
       const metrics = getMessageMetrics();
-      updateProgress(prev => ({
-        ...prev,
+      updateProgress({
         current: metrics.totalProcessed,
+        total: messages.length,
         success: metrics.successCount,
         failed: metrics.errorCount
-      }));
+      });
   
       // Prepare for next attempt
       if (failed.length > 0) {
@@ -267,9 +314,50 @@ function App() {
         await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
       }
     }
-  }, [sendMessageWithTokenRecovery]); // Depends on the memoized sendMessageWithTokenRecovery
-  
+  }, [sendMessageWithTokenRecovery]);
   // Main dispatch function with all required dependencies
+  
+  const SessionStatus = () => {
+    const [timeRemaining, setTimeRemaining] = useState(null);
+  
+    useEffect(() => {
+      const calculateTimeRemaining = () => {
+        const session = localStorage.getItem("kc_session");
+        if (!session) return null;
+        
+        const sessionData = JSON.parse(session);
+        const expiresAt = sessionData.timestamp + (sessionData.expiresIn * 1000);
+        const remaining = Math.max(0, expiresAt - Date.now());
+        return Math.floor(remaining / 1000 / 60); // Minutes remaining
+      };
+  
+      const interval = setInterval(() => {
+        setTimeRemaining(calculateTimeRemaining());
+      }, 60000);
+  
+      setTimeRemaining(calculateTimeRemaining()); // Initial calculation
+      return () => clearInterval(interval);
+    }, []);
+  
+    if (!isLoggedIn || timeRemaining === null) return null;
+  
+    return (
+      <div style={{ 
+        margin: "10px 0",
+        padding: "10px",
+        background: timeRemaining > 5 ? "#e8f5e9" : "#fff3e0",
+        borderRadius: "5px",
+        borderLeft: `4px solid ${timeRemaining > 5 ? "#4caf50" : "#ff9800"}`
+      }}>
+        <strong>Session Status:</strong> {timeRemaining > 5 ? 
+          `Active (${timeRemaining} minutes remaining)` : 
+          `Expiring soon (${timeRemaining} minutes remaining)`}
+      </div>
+    );
+  };
+  
+  // Add to your return statement
+
   const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
     setError("");
     setDispatching(true);
@@ -460,6 +548,8 @@ useEffect(() => {
             </p>
           </div>
         )}
+          {isLoggedIn && <SessionStatus />} 
+
         
         <a href="https://kingslist.pro/messages" style={{ 
           display: "block", 
