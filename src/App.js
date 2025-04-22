@@ -2,7 +2,7 @@
 
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
-import { login, sendMessage, getMessageMetrics, resetMessageMetrics, refreshToken } from "./services/kingschat";
+import { login, sendMessage, getMessageMetrics, resetMessageMetrics } from "./services/kingschat";
 import {
   fetchDispatchBatch,
   prepareMessagesForDispatch,
@@ -29,8 +29,6 @@ function App() {
   });
   const [retryCounts, setRetryCounts] = useState({});
   const [processedMessages, setProcessedMessages] = useState(new Set());
-  const [tokenRefreshInterval, setTokenRefreshInterval] = useState(null);
-
   const progressRef = useRef(progress);
 
   const updateProgress = (updateFn) => {
@@ -108,22 +106,34 @@ function App() {
     const verifySession = async () => {
       const session = localStorage.getItem("kc_session");
       if (!session) return;
-
+  
       try {
         const sessionData = JSON.parse(session);
         const response = await fetch(
           "https://kingslist.pro/app/default/api/verify_session.php",
           {
             method: "POST",
+            credentials: 'include',
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ accessToken: sessionData.accessToken }),
+            body: JSON.stringify({
+              accessToken: sessionData.accessToken,
+              refreshToken: sessionData.refreshToken
+            }),
           }
         );
-
+  
         if (response.ok) {
           const data = await response.json();
           if (data.valid) {
-            setAccessToken(sessionData.accessToken);
+            if (data.newToken) {
+              const updatedSession = {
+                ...sessionData,
+                accessToken: data.newToken,
+                timestamp: Date.now()
+              };
+              localStorage.setItem("kc_session", JSON.stringify(updatedSession));
+              setAccessToken(data.newToken);
+            }
             setIsLoggedIn(true);
           } else {
             localStorage.removeItem("kc_session");
@@ -134,66 +144,47 @@ function App() {
         localStorage.removeItem("kc_session");
       }
     };
-
+  
     verifySession();
+    const interval = setInterval(verifySession, 300000); // Check every 5 minutes
+    return () => clearInterval(interval);
   }, []);
 
-
-// Add this to your App component
-
-// Token monitoring function
-const monitorToken = useCallback(async () => {
-  const session = localStorage.getItem("kc_session");
-  if (!session) {
-    console.log("No active session found");
-    return;
-  }
-
+  // Client-side (JavaScript) decryption function
+function decryptToken(encryptedToken) {
   try {
-    const sessionData = JSON.parse(session);
-    console.log("Current token:", {
-      accessToken: sessionData.accessToken?.substring(0, 10) + "...",
-      expiresAt: new Date(sessionData.timestamp + (sessionData.expiresIn * 1000)),
-      timeRemaining: Math.floor(((sessionData.timestamp + (sessionData.expiresIn * 1000)) - Date.now()) / 1000) + "s"
-    });
 
-    // Refresh if token expires in less than 30 seconds
-    if (Date.now() > sessionData.timestamp + (sessionData.expiresIn * 1000) - 30000) {
-      console.log("Token nearing expiration, refreshing...");
-      const newToken = await refreshToken(sessionData.refreshToken);
-      
-      const updatedSession = {
-        ...sessionData,
-        accessToken: newToken.accessToken,
-        refreshToken: newToken.refreshToken || sessionData.refreshToken,
-        timestamp: Date.now()
-      };
-      
-      localStorage.setItem("kc_session", JSON.stringify(updatedSession));
-      setAccessToken(newToken.accessToken);
-      console.log("Token refreshed successfully:", {
-        newToken: newToken.accessToken?.substring(0, 10) + "..."
-      });
+    return atob(encryptedToken);
+    
+
+  } catch (e) {
+    console.error("Decryption failed:", e);
+    return null;
+  }
+}
+  useEffect(() => {
+    // Check for token in URL or sessionStorage
+    const urlParams = new URLSearchParams(window.location.search);
+    const sessionToken = sessionStorage.getItem('temp_token');
+    
+    if (!localStorage.getItem("kc_session") && (urlParams.get('session_token') || sessionToken)) {
+      try {
+        const token = sessionToken || decryptToken(urlParams.get('session_token'));
+        localStorage.setItem("kc_session", JSON.stringify({
+          accessToken: token,
+          refreshToken: '', // Will get refreshed on first verify
+          expiresIn: 3600,
+          timestamp: Date.now()
+        }));
+        
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        sessionStorage.removeItem('temp_token');
+      } catch (e) {
+        console.error("Token recovery failed:", e);
+      }
     }
-  } catch (error) {
-    console.error("Token monitoring error:", error);
-  }
-}, []);
-
-// Start/stop monitoring
-useEffect(() => {
-  if (isLoggedIn) {
-    // Immediate first check
-    monitorToken();
-    
-    // Set up interval
-    const interval = setInterval(monitorToken, 5000);
-    setTokenRefreshInterval(interval);
-    
-    return () => clearInterval(interval);
-  }
-}, [isLoggedIn, monitorToken]);
-
+  }, []);
 
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
