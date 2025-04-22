@@ -12,15 +12,12 @@ import {
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
-    const session = localStorage.getItem("kc_session");
-    return session ? JSON.parse(session).accessToken : false;
+    return localStorage.getItem("kc_session") !== null;
   });
-  
   const [accessToken, setAccessToken] = useState(() => {
     const session = localStorage.getItem("kc_session");
     return session ? JSON.parse(session).accessToken : "";
   });
-
   const [dispatching, setDispatching] = useState(false);
   const [error, setError] = useState("");
   const [dispatchId, setDispatchId] = useState("");
@@ -32,6 +29,8 @@ function App() {
   });
   const [retryCounts, setRetryCounts] = useState({});
   const [processedMessages, setProcessedMessages] = useState(new Set());
+  const [tokenRefreshInterval, setTokenRefreshInterval] = useState(null);
+
   const progressRef = useRef(progress);
 
   const updateProgress = (updateFn) => {
@@ -139,87 +138,53 @@ function App() {
     verifySession();
   }, []);
 
-  const updateDispatchStatus = useCallback(async (dmsg_id) => {
-    try {
-      const messageMetrics = getMessageMetrics();
-      const response = await fetch(
-        "https://kingslist.pro/app/default/api/updateDispatchCount.php",
-        {
-          method: "POST",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            dmsg_id,
-            dispatch_count: messageMetrics.successCount,
-            attempts: messageMetrics.totalProcessed,
-            status: messageMetrics.errorCount > 0 ? 1 : 2,
-          }),
-        }
-      );
-  
-      const data = await response.json();
-      if (!data.success) throw new Error(data.error || "Failed to update status");
-      return data;
-    } catch (error) {
-      console.error("Status update failed:", error);
-      throw error;
+  // Add this to your App component
+
+const maintainSession = useCallback(async () => {
+  const session = localStorage.getItem("kc_session");
+  if (!session) return;
+
+  try {
+    const sessionData = JSON.parse(session);
+    const timeElapsed = Date.now() - sessionData.timestamp;
+    const expiresInMs = (sessionData.expiresIn || 3600) * 1000;
+
+    // Refresh token if it's about to expire (5 minutes before)
+    if (timeElapsed > expiresInMs - 300000) {
+      const newToken = await refreshToken(sessionData.refreshToken);
+      const updatedSession = {
+        ...sessionData,
+        accessToken: newToken.accessToken,
+        refreshToken: newToken.refreshToken || sessionData.refreshToken,
+        timestamp: Date.now()
+      };
+      localStorage.setItem("kc_session", JSON.stringify(updatedSession));
+      setAccessToken(newToken.accessToken);
+      console.log('Token refreshed successfully');
     }
-  }, []);
-
- 
-
-// In your App component
-
-
-// Persistent session checker
-useEffect(() => {
-  const checkSession = async () => {
-    const session = localStorage.getItem("kc_session");
-    if (!session) return;
-
-    try {
-      const sessionData = JSON.parse(session);
-      const now = Date.now();
-      const expiresAt = sessionData.timestamp + (sessionData.expiresIn * 1000);
-      
-      // Refresh token if it's expired or about to expire (within 5 minutes)
-      if (now >= expiresAt - 300000) {
-        const newToken = await refreshToken(sessionData.refreshToken);
-        const updatedSession = {
-          ...sessionData,
-          accessToken: newToken.accessToken,
-          refreshToken: newToken.refreshToken || sessionData.refreshToken,
-          timestamp: Date.now()
-        };
-        localStorage.setItem("kc_session", JSON.stringify(updatedSession));
-        setAccessToken(newToken.accessToken);
-      }
-      
-      setIsLoggedIn(true);
-    } catch (error) {
-      console.error("Session check failed:", error);
-      localStorage.removeItem("kc_session");
-      setIsLoggedIn(false);
-    }
-  };
-
-  // Check session every minute
-  const interval = setInterval(checkSession, 60000);
-  checkSession(); // Initial check
-  return () => clearInterval(interval);
+  } catch (error) {
+    console.error("Session maintenance failed:", error);
+    localStorage.removeItem("kc_session");
+    setIsLoggedIn(false);
+  }
 }, []);
 
-  
-  // Memoize sendMessageWithTokenRecovery to prevent recreation on every render
-// Enhanced token refresh interceptor
-const sendMessageWithTokenRecovery = useCallback(async (msg, dmsg_id) => {
+useEffect(() => {
+  if (isLoggedIn) {
+    // Check every 30 seconds
+    const interval = setInterval(maintainSession, 30000);
+    setTokenRefreshInterval(interval);
+    return () => clearInterval(interval);
+  }
+}, [isLoggedIn, maintainSession]);
+
+const sendMessageWithRetry = useCallback(async (msg, maxRetries = 3) => {
   let currentToken = accessToken;
   let retries = 0;
-  const maxRetries = 3; // Increased retry attempts
 
   while (retries < maxRetries) {
     try {
-      await new Promise(res => setTimeout(res, 500));
+      await new Promise(res => setTimeout(res, 500)); // Small delay between sends
       const result = await sendMessage(currentToken, msg.kc_id, msg.body);
       return result;
     } catch (error) {
@@ -227,9 +192,8 @@ const sendMessageWithTokenRecovery = useCallback(async (msg, dmsg_id) => {
         console.log('Token expired, attempting refresh...');
         try {
           const session = JSON.parse(localStorage.getItem("kc_session"));
-          if (!session?.refreshToken) throw new Error("No refresh token available");
-          
           const newToken = await refreshToken(session.refreshToken);
+          
           const updatedSession = {
             ...session,
             accessToken: newToken.accessToken,
@@ -244,233 +208,244 @@ const sendMessageWithTokenRecovery = useCallback(async (msg, dmsg_id) => {
           continue; // Retry with new token
         } catch (refreshError) {
           console.error('Token refresh failed:', refreshError);
-          if (retries === maxRetries - 1) {
-            // Last attempt failed - mark message as failed but keep session
-            errorCount++;
-            throw new Error(`Final attempt failed after token refresh`);
-          }
+          if (retries === maxRetries - 1) throw error;
         }
+      } else {
+        throw error;
       }
-      throw error; // Re-throw other errors
     }
   }
   throw new Error(`Max retries (${maxRetries}) exceeded`);
 }, [accessToken]);
 
+  const updateDispatchStatus = useCallback(async (dmsg_id) => {
+    try {
+      const {  failed } = progressRef.current;
+      const messageMetrics = getMessageMetrics();
+      const uniqueProcessed = messageMetrics.successCount + messageMetrics.errorCount;
+    const totalAttempts = Object.values(retryCounts).reduce((a, b) => a + b, 0);
+
+    
+      const response = await fetch(
+        "https://kingslist.pro/app/default/api/updateDispatchCount.php",
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dmsg_id,
+            dispatch_count: uniqueProcessed,
+            attempts: totalAttempts,
+            status: failed > 0 && uniqueProcessed < progressRef.current.total ? 1 : 2,
+          }),
+        }
+      );
+
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || "Failed to update status");
+      return data;
+    } catch (error) {
+      console.error("Status update failed:", error);
+      throw error;
+    }
+  }, [retryCounts]);
+
+//   const handleDispatch = useCallback(async (dmsg_id) => {
+//     setError("");
+//     setDispatching(true);
+//     updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
+//     setRetryCounts({});
+//     setProcessedMessages(new Set());
+//     resetMessageMetrics();
+
+//     // Rate limiting configuration
+//     const RATE_LIMIT = {
+//         MESSAGE_DELAY_MS: 3000, // Base delay between messages
+//         RETRY_DELAY_MS: 3000,   // Delay for retries
+//         BATCH_DELAY_MS: 5000,   // Delay after each batch
+//         MAX_RETRY_ATTEMPTS: 1,  // Max retry attempts
+//         BATCH_SIZE: 10          // Messages per batch
+//     };
+
+//     try {
+//         const batchData = await fetchDispatchBatch(dmsg_id);
+//         let messages = prepareMessagesForDispatch(batchData);
+
+//         messages = messages.map(msg => ({
+//             ...msg,
+//             body: msg.body
+//                 .replace(/<kc_username>/g, msg.username)
+//                 .replace(/<fullname>/g, msg.fullname),
+//         }));
+
+//         let remainingMessages = messages;
+//         let attempt = 0;
+
+//         updateProgress(prev => ({ ...prev, total: messages.length }));
+
+//         while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+//             const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
+//             remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
+
+//             // Update retry counts
+//             setRetryCounts(prev => {
+//                 const newCounts = { ...prev };
+//                 currentBatch.forEach(msg => {
+//                     if (!processedMessages.has(msg.kc_id)) {
+//                         newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
+//                     }
+//                 });
+//                 return newCounts;
+//             });
+
+//             // Process current batch
+//             for (const msg of currentBatch) {
+//                 if (processedMessages.has(msg.kc_id)) continue;
+
+//                 try {
+//                     await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+//                     const res = await sendMessage(accessToken, msg.kc_id, msg.body);
+
+//                     if (res.success) {
+//                         setProcessedMessages(prev => new Set(prev).add(msg.kc_id));
+//                         updateProgress(prev => ({
+//                             ...prev,
+//                             current: prev.current + 1,
+//                             success: prev.success + 1,
+//                         }));
+//                         continue;
+//                     }
+//                 } catch (err) {
+//                     console.warn(`Error sending to ${msg.kc_id}:`, err.message);
+//                 }
+
+//                 const currentRetry = retryCounts[msg.kc_id] || 0;
+//                 if (currentRetry < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
+//                     remainingMessages.push(msg);
+//                 } else {
+//                     updateProgress(prev => ({
+//                         ...prev,
+//                         current: prev.current + 1,
+//                         failed: prev.failed + 1,
+//                     }));
+//                 }
+//             }
+
+//             attempt++;
+//             if (remainingMessages.length > 0) {
+//               const delayAttempt = attempt; 
+//               await new Promise(res => setTimeout(res, 
+//                   delayAttempt === 1 ? RATE_LIMIT.BATCH_DELAY_MS : RATE_LIMIT.RETRY_DELAY_MS
+//               ));
+//           }
+//         }
+
+//         const finalStatus = await updateDispatchStatus(dmsg_id);
+//         if (!finalStatus.success) throw new Error("Update failed");
+
+//         sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
+//         sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
+//             success: progressRef.current.success,
+//             failed: progressRef.current.failed,
+//             retries: Object.values(retryCounts).filter(c => c > 1).length
+//         }));
+        
+//         const newUrl = new URL(window.location.href);
+//         newUrl.searchParams.set("start_dispatch", "2");
+//         window.history.pushState({}, "", newUrl.toString());
+
+//     } catch (err) {
+//         setError(`Dispatch error: ${err.message}`);
+//     } finally {
+//         setDispatching(false);
+//     }
+// }, [accessToken, updateDispatchStatus, processedMessages, retryCounts]);
+
+const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
+  setError("");
+  setDispatching(true);
   
-  // Memoize processMessagesWithRetry with all required dependencies
-  const processMessagesWithRetry = useCallback(async (messages, dmsg_id, isRetry) => {
-    const RATE_LIMIT = {
-      MESSAGE_DELAY_MS: 2000,
-      BATCH_SIZE: 5,
-      MAX_RETRY_ATTEMPTS: 3
-    };
-  
-    let remainingMessages = [...messages];
-    let attempt = 0;
-  
-    while (remainingMessages.length > 0 && attempt < RATE_LIMIT.MAX_RETRY_ATTEMPTS) {
-      const currentBatch = remainingMessages.slice(0, RATE_LIMIT.BATCH_SIZE);
-      remainingMessages = remainingMessages.slice(RATE_LIMIT.BATCH_SIZE);
-  
+  if (!isRetry) {
+    updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
+    setRetryCounts({});
+    setProcessedMessages(new Set());
+    resetMessageMetrics();
+  }
+
+  try {
+    const batchData = await fetchDispatchBatch(dmsg_id);
+    let messages = prepareMessagesForDispatch(batchData);
+
+    // If retry, only process failed messages
+    if (isRetry) {
+      const metrics = getMessageMetrics();
+      messages = messages.filter(msg => 
+        !processedMessages.has(msg.kc_id) && 
+        (retryCounts[msg.kc_id] || 0) < 3
+      );
+    }
+
+    messages = messages.map(msg => ({
+      ...msg,
+      body: msg.body
+        .replace(/<kc_username>/g, msg.username)
+        .replace(/<fullname>/g, msg.fullname),
+    }));
+
+    updateProgress(prev => ({ ...prev, total: messages.length }));
+
+    // Process messages in batches
+    const BATCH_SIZE = 5;
+    for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+      const batch = messages.slice(i, i + BATCH_SIZE);
+      
       const results = await Promise.allSettled(
-        currentBatch.map(msg => 
-          sendMessageWithTokenRecovery(msg, dmsg_id)
+        batch.map(msg => 
+          sendMessageWithRetry(msg)
             .then(() => ({ success: true, msg }))
             .catch(e => ({ success: false, msg, error: e }))
         )
       );
-  
+
       // Update state
       const successful = results.filter(r => r.value.success);
       const failed = results.filter(r => !r.value.success);
-  
+
       setProcessedMessages(prev => new Set([...prev, ...successful.map(s => s.value.msg.kc_id)]));
       
       setRetryCounts(prev => {
         const newCounts = { ...prev };
-        currentBatch.forEach(msg => {
+        batch.forEach(msg => {
           newCounts[msg.kc_id] = (newCounts[msg.kc_id] || 0) + 1;
         });
         return newCounts;
       });
-  
-      // Update progress
+
+      // Update progress from metrics
       const metrics = getMessageMetrics();
-      updateProgress({
+      updateProgress(prev => ({
+        ...prev,
         current: metrics.totalProcessed,
-        total: messages.length,
         success: metrics.successCount,
         failed: metrics.errorCount
-      });
-  
-      // Prepare for next attempt
-      if (failed.length > 0) {
-        remainingMessages = [...remainingMessages, ...failed.map(f => f.value.msg)];
-      }
-  
-      attempt++;
-      if (remainingMessages.length > 0) {
-        await new Promise(res => setTimeout(res, RATE_LIMIT.MESSAGE_DELAY_MS));
+      }));
+
+      // Small delay between batches
+      if (i + BATCH_SIZE < messages.length) {
+        await new Promise(res => setTimeout(res, 2000));
       }
     }
-  }, [sendMessageWithTokenRecovery]);
-  // Main dispatch function with all required dependencies
-  
-  const SessionStatus = () => {
-    const [timeRemaining, setTimeRemaining] = useState(null);
-  
-    useEffect(() => {
-      const calculateTimeRemaining = () => {
-        const session = localStorage.getItem("kc_session");
-        if (!session) return null;
-        
-        const sessionData = JSON.parse(session);
-        const expiresAt = sessionData.timestamp + (sessionData.expiresIn * 1000);
-        const remaining = Math.max(0, expiresAt - Date.now());
-        return Math.floor(remaining / 1000 / 60); // Minutes remaining
-      };
-  
-      const interval = setInterval(() => {
-        setTimeRemaining(calculateTimeRemaining());
-      }, 60000);
-  
-      setTimeRemaining(calculateTimeRemaining()); // Initial calculation
-      return () => clearInterval(interval);
-    }, []);
-  
-    if (!isLoggedIn || timeRemaining === null) return null;
-  
-    return (
-      <div style={{ 
-        margin: "10px 0",
-        padding: "10px",
-        background: timeRemaining > 5 ? "#e8f5e9" : "#fff3e0",
-        borderRadius: "5px",
-        borderLeft: `4px solid ${timeRemaining > 5 ? "#4caf50" : "#ff9800"}`
-      }}>
-        <strong>Session Status:</strong> {timeRemaining > 5 ? 
-          `Active (${timeRemaining} minutes remaining)` : 
-          `Expiring soon (${timeRemaining} minutes remaining)`}
-      </div>
-    );
-  };
-  
-  // Add to your return statement
 
-  const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
-    setError("");
-    setDispatching(true);
-    
-    if (!isRetry) {
-      updateProgress(() => ({ current: 0, total: 0, success: 0, failed: 0 }));
-      setRetryCounts({});
-      setProcessedMessages(new Set());
-      resetMessageMetrics();
-    }
-  
-    try {
-      const batchData = await fetchDispatchBatch(dmsg_id);
-      let messages = prepareMessagesForDispatch(batchData);
-  
-      // If this is a retry, only process messages that had errors and weren't processed
-      if (isRetry) {
-        const metrics = getMessageMetrics();
-        if (metrics.errorCount === 0) {
-          throw new Error("No failed messages to retry");
-        }
-        messages = messages.filter(msg => 
-          !processedMessages.has(msg.kc_id) && 
-          (retryCounts[msg.kc_id] || 0) < 2
-        );
-      }
-  
-      messages = messages.map(msg => ({
-        ...msg,
-        body: msg.body
-          .replace(/<kc_username>/g, msg.username)
-          .replace(/<fullname>/g, msg.fullname),
-      }));
-  
-      updateProgress(prev => ({ 
-        ...prev, 
-        total: isRetry ? messages.length : messages.length 
-      }));
-  
-      // Process messages with retry logic
-      await processMessagesWithRetry(messages, dmsg_id, isRetry);
-  
-      const finalStatus = await updateDispatchStatus(dmsg_id);
-      if (!finalStatus.success) throw new Error("Update failed");
-  
-      sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
-      sessionStorage.setItem(`dispatch_analytics_${dmsg_id}`, JSON.stringify({
-        success: getMessageMetrics().successCount,
-        failed: getMessageMetrics().errorCount,
-        retries: Object.values(retryCounts).filter(c => c > 1).length
-      }));
-  
-      const newUrl = new URL(window.location.href);
-      newUrl.searchParams.set("start_dispatch", "2");
-      window.history.pushState({}, "", newUrl.toString());
-  
-    } catch (err) {
-      setError(`Dispatch error: ${err.message}`);
-    } finally {
-      setDispatching(false);
-    }
-  }, [
+    // Final status update
+    await updateDispatchStatus(dmsg_id);
+    sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
 
-    updateDispatchStatus, 
-    processMessagesWithRetry, 
-    processedMessages, 
-    retryCounts
-  ]);
-
-
-
-// Enhanced token management in App component
-const [tokenRefreshInterval, setTokenRefreshInterval] = useState(null);
-
-const startTokenRefresh = useCallback(() => {
-  // Clear any existing interval
-  if (tokenRefreshInterval) clearInterval(tokenRefreshInterval);
-
-  const interval = setInterval(async () => {
-    const session = localStorage.getItem("kc_session");
-    if (!session) return;
-
-    const sessionData = JSON.parse(session);
-    try {
-      const newToken = await refreshToken(sessionData.refreshToken);
-      const updatedSession = {
-        ...sessionData,
-        accessToken: newToken.accessToken,
-        refreshToken: newToken.refreshToken || sessionData.refreshToken,
-        timestamp: Date.now()
-      };
-      localStorage.setItem("kc_session", JSON.stringify(updatedSession));
-      setAccessToken(newToken.accessToken);
-      console.log('Token refreshed successfully');
-    } catch (error) {
-      console.error("Token refresh failed:", error);
-      clearInterval(interval);
-      localStorage.removeItem("kc_session");
-      setIsLoggedIn(false);
-    }
-  }, 15000); // Refresh every 15 seconds to prevent expiration
-
-  setTokenRefreshInterval(interval);
-  return interval;
-}, [tokenRefreshInterval]);
-
-useEffect(() => {
-  if (isLoggedIn) {
-    const interval = startTokenRefresh();
-    return () => clearInterval(interval);
+  } catch (err) {
+    setError(`Dispatch error: ${err.message}`);
+  } finally {
+    setDispatching(false);
   }
-}, [isLoggedIn, startTokenRefresh]);
-
+}, [ updateDispatchStatus, processedMessages, retryCounts, sendMessageWithRetry]);
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
@@ -489,6 +464,44 @@ useEffect(() => {
     }
   }, [isLoggedIn, dispatching, handleDispatch]);
 
+const SessionStatus = () => {
+  const [timeRemaining, setTimeRemaining] = useState(null);
+
+  useEffect(() => {
+    const calculateTime = () => {
+      const session = localStorage.getItem("kc_session");
+      if (!session) return null;
+      
+      const { timestamp, expiresIn } = JSON.parse(session);
+      const remaining = (timestamp + (expiresIn * 1000)) - Date.now();
+      return Math.floor(remaining / 1000 / 60); // Minutes remaining
+    };
+
+    const interval = setInterval(() => {
+      setTimeRemaining(calculateTime());
+    }, 60000);
+
+    setTimeRemaining(calculateTime()); // Initial calculation
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!isLoggedIn || timeRemaining === null) return null;
+
+  return (
+    <div style={{ 
+      margin: "10px 0", 
+      padding: "10px",
+      background: timeRemaining > 5 ? "#e8f5e9" : "#fff3e0",
+      borderRadius: "5px"
+    }}>
+      <strong>Session Status:</strong> {timeRemaining > 0 ? 
+        `Active (${timeRemaining} min remaining)` : 
+        "Expired - Please log in again"}
+    </div>
+  );
+};
+
+// Add to your return statement
   // Helper: Visual Progress Bar
   const ProgressBar = () => {
     if (!progress.total) return null;
@@ -509,54 +522,34 @@ useEffect(() => {
   };
 
   const DispatchAnalytics = () => {
-    const metrics = getMessageMetrics();
-    
     if (!progress.total || (dispatching && progress.current === 0)) return null;
+    
+    // Get the message send metrics
+    const messageMetrics = getMessageMetrics();
+    const metrics = getMessageMetrics();
+console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors: ${metrics.errorCount}`);
   
     return (
       <div style={{ marginTop: "20px", padding: "10px", border: "1px solid #ccc", borderRadius: "8px" }}>
         {progress.current >= progress.total && (
           <div style={{color: "#28a745", fontWeight: "bold", marginBottom: "10px"}}>
-            {metrics.errorCount > 0 ? "Dispatch Completed with Errors" : "Dispatch Successfully Completed"}
+            {progress.failed > 0 ? "Dispatch Completed with Errors" : "Dispatch Successfully Completed"}
           </div>
         )}
         <h4>Dispatch Summary</h4>
         <p><strong>Total:</strong> {progress.total}</p>
-        <p style={{ color: "#28a745" }}><strong>Success:</strong> {metrics.successCount}</p>
-        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {metrics.errorCount}</p>
-        <p style={{ color: "#ffc107" }}><strong>Success Rate:</strong> {metrics.successRate.toFixed(1)}%</p>
+        {/* <p style={{ color: "#28a745" }}><strong>Success:</strong> {progress.success}</p>
+        <p style={{ color: "#dc3545" }}><strong>Failed:</strong> {progress.failed}</p> */}
+        <p style={{ color: "#ffc107" }}><strong>Retried:</strong> {
+          Object.values(retryCounts).filter(count => count > 1).length
+        }</p>
         
-        {metrics.errorCount > 0 && (
-          <div>
-            <button
-              onClick={() => handleDispatch(dispatchId, true)}
-              style={{
-                padding: "10px 20px",
-                background: "#ffc107",
-                color: "black",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer",
-                fontWeight: "bold",
-                marginTop: "10px"
-              }}
-            >
-              Retry Failed Messages ({metrics.errorCount})
-            </button>
-            <p style={{ color: "#dc3545", marginTop: "5px" }}>
-              Click to retry {metrics.errorCount} failed message(s)
-            </p>
-          </div>
-        )}
-          {isLoggedIn && <SessionStatus />} 
-
+        {/* Add the message send metrics */}
+        <h4 style={{ marginTop: "15px" }}>Message Send Metrics</h4>
+        <p style={{ color: "#28a745" }}><strong> Successes:</strong> {messageMetrics.successCount}</p>
+        <p style={{ color: "#dc3545" }}><strong> Errors:</strong> {messageMetrics.errorCount}</p>
         
-        <a href="https://kingslist.pro/messages" style={{ 
-          display: "block", 
-          marginTop: "15px",
-          color: "#007bff", 
-          textDecoration: "underline" 
-        }}>
+        <a href="https://kingslist.pro/messages" style={{ color: "#007bff", textDecoration: "underline" }}>
           Go to Messages Page
         </a>
       </div>
@@ -598,6 +591,7 @@ useEffect(() => {
               <ProgressBar />
             </div>
           )}
+{isLoggedIn && <SessionStatus />}
 
           <DispatchAnalytics />
 
@@ -617,7 +611,6 @@ useEffect(() => {
               Start Dispatch
             </button>
           )}
-
         </div>
       )}
     </div>
