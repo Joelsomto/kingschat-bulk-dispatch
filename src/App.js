@@ -376,9 +376,7 @@ const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
     const batchData = await fetchDispatchBatch(dmsg_id);
     let messages = prepareMessagesForDispatch(batchData);
 
-    // If retry, only process failed messages
     if (isRetry) {
-      const metrics = getMessageMetrics();
       messages = messages.filter(msg => 
         !processedMessages.has(msg.kc_id) && 
         (retryCounts[msg.kc_id] || 0) < 3
@@ -407,10 +405,7 @@ const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
         )
       );
 
-      // Update state
       const successful = results.filter(r => r.value.success);
-      const failed = results.filter(r => !r.value.success);
-
       setProcessedMessages(prev => new Set([...prev, ...successful.map(s => s.value.msg.kc_id)]));
       
       setRetryCounts(prev => {
@@ -421,22 +416,18 @@ const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
         return newCounts;
       });
 
-      // Update progress from metrics
-      const metrics = getMessageMetrics();
       updateProgress(prev => ({
         ...prev,
-        current: metrics.totalProcessed,
-        success: metrics.successCount,
-        failed: metrics.errorCount
+        current: prev.current + batch.length,
+        success: prev.success + successful.length,
+        failed: prev.failed + (batch.length - successful.length)
       }));
 
-      // Small delay between batches
       if (i + BATCH_SIZE < messages.length) {
         await new Promise(res => setTimeout(res, 2000));
       }
     }
 
-    // Final status update
     await updateDispatchStatus(dmsg_id);
     sessionStorage.setItem(`dispatch_status_${dmsg_id}`, "completed");
 
@@ -445,8 +436,7 @@ const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
   } finally {
     setDispatching(false);
   }
-}, [ updateDispatchStatus, processedMessages, retryCounts, sendMessageWithRetry]);
-
+}, [accessToken, updateDispatchStatus, processedMessages, retryCounts, sendMessageWithRetry]);
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search);
     const dmsg_id = urlParams.get("dmsg_id");
@@ -464,42 +454,49 @@ const handleDispatch = useCallback(async (dmsg_id, isRetry = false) => {
     }
   }, [isLoggedIn, dispatching, handleDispatch]);
 
-const SessionStatus = () => {
-  const [timeRemaining, setTimeRemaining] = useState(null);
-
-  useEffect(() => {
-    const calculateTime = () => {
-      const session = localStorage.getItem("kc_session");
-      if (!session) return null;
-      
-      const { timestamp, expiresIn } = JSON.parse(session);
-      const remaining = (timestamp + (expiresIn * 1000)) - Date.now();
-      return Math.floor(remaining / 1000 / 60); // Minutes remaining
-    };
-
-    const interval = setInterval(() => {
-      setTimeRemaining(calculateTime());
-    }, 60000);
-
-    setTimeRemaining(calculateTime()); // Initial calculation
-    return () => clearInterval(interval);
-  }, []);
-
-  if (!isLoggedIn || timeRemaining === null) return null;
-
-  return (
-    <div style={{ 
-      margin: "10px 0", 
-      padding: "10px",
-      background: timeRemaining > 5 ? "#e8f5e9" : "#fff3e0",
-      borderRadius: "5px"
-    }}>
-      <strong>Session Status:</strong> {timeRemaining > 0 ? 
-        `Active (${timeRemaining} min remaining)` : 
-        "Expired - Please log in again"}
-    </div>
-  );
-};
+  const SessionStatus = ({ isExpired, handleLogin, timeRemaining }) => {
+    if (isExpired) {
+      return (
+        <div style={{ 
+          margin: "10px 0", 
+          padding: "10px",
+          background: "#ffebee",
+          borderRadius: "5px",
+          borderLeft: "4px solid #f44336"
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span><strong>Session Status:</strong> Expired - Please log in again</span>
+            <button
+              onClick={handleLogin}
+              style={{
+                padding: "8px 16px",
+                background: "#007bff",
+                color: "white",
+                border: "none",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontWeight: "bold",
+              }}
+            >
+              Log In Again
+            </button>
+          </div>
+        </div>
+      );
+    }
+  
+    return (
+      <div style={{ 
+        margin: "10px 0", 
+        padding: "10px",
+        background: timeRemaining > 5 ? "#e8f5e9" : "#fff3e0",
+        borderRadius: "5px",
+        borderLeft: `4px solid ${timeRemaining > 5 ? "#4caf50" : "#ff9800"}`
+      }}>
+        <strong>Session Status:</strong> Active ({timeRemaining} min remaining)
+      </div>
+    );
+  };
 
 // Add to your return statement
   // Helper: Visual Progress Bar
@@ -560,13 +557,13 @@ console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors:
     <div style={{ padding: "30px", maxWidth: "600px", margin: "auto", fontFamily: "sans-serif" }}>
       <h2 style={{ color: "#2a2a2a" }}>Kingslist Portal</h2>
       <p>Welcome! Log in with KingsChat to begin dispatching your message batch.</p>
-
+  
       {error && (
         <div style={{ background: "#ffe0e0", padding: "10px", borderRadius: "5px", color: "#b00020" }}>
           {error}
         </div>
       )}
-
+  
       {!isLoggedIn ? (
         <button
           onClick={handleLogin}
@@ -584,6 +581,8 @@ console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors:
         </button>
       ) : (
         <div>
+          <SessionStatus />
+          
           {dispatching && (
             <div style={{ margin: "20px 0", color: "#28a745" }}>
               Dispatching... {progress.current} / {progress.total} (
@@ -591,26 +590,44 @@ console.log(`Final Message Metrics - Successes: ${metrics.successCount}, Errors:
               <ProgressBar />
             </div>
           )}
-{isLoggedIn && <SessionStatus />}
-
+  
           <DispatchAnalytics />
-
+  
           {!dispatching && dispatchId && (
-            <button
-              onClick={() => handleDispatch(dispatchId)}
-              style={{
-                padding: "10px 20px",
-                background: "#28a745",
-                color: "white",
-                border: "none",
-                borderRadius: "5px",
-                cursor: "pointer",
-                fontWeight: "bold",
-              }}
-            >
-              Start Dispatch
-            </button>
-          )}
+  <>
+    {progress.failed > 0 && (
+      <button
+        onClick={() => handleDispatch(dispatchId, true)}
+        style={{
+          padding: "10px 20px",
+          background: "#ff9800",
+          color: "white",
+          border: "none",
+          borderRadius: "5px",
+          cursor: "pointer",
+          fontWeight: "bold",
+          marginLeft: "10px"
+        }}
+      >
+        Retry Failed ({progress.failed})
+      </button>
+    )}
+    <button
+      onClick={() => handleDispatch(dispatchId)}
+      style={{
+        padding: "10px 20px",
+        background: "#28a745",
+        color: "white",
+        border: "none",
+        borderRadius: "5px",
+        cursor: "pointer",
+        fontWeight: "bold",
+      }}
+    >
+      {progress.failed > 0 ? "Start New Dispatch" : "Start Dispatch"}
+    </button>
+  </>
+)}
         </div>
       )}
     </div>
