@@ -150,42 +150,11 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Client-side (JavaScript) decryption function
-function decryptToken(encryptedToken) {
-  try {
 
-    return atob(encryptedToken);
-    
 
-  } catch (e) {
-    console.error("Decryption failed:", e);
-    return null;
-  }
-}
-  useEffect(() => {
-    // Check for token in URL or sessionStorage
-    const urlParams = new URLSearchParams(window.location.search);
-    const sessionToken = sessionStorage.getItem('temp_token');
-    
-    if (!localStorage.getItem("kc_session") && (urlParams.get('session_token') || sessionToken)) {
-      try {
-        const token = sessionToken || decryptToken(urlParams.get('session_token'));
-        localStorage.setItem("kc_session", JSON.stringify({
-          accessToken: token,
-          refreshToken: '', // Will get refreshed on first verify
-          expiresIn: 3600,
-          timestamp: Date.now()
-        }));
-        
-        // Clean up URL
-        window.history.replaceState({}, document.title, window.location.pathname);
-        sessionStorage.removeItem('temp_token');
-      } catch (e) {
-        console.error("Token recovery failed:", e);
-      }
-    }
-  }, []);
 
+
+  // dispatch status
   const updateDispatchStatus = useCallback(async (dmsg_id) => {
     try {
       const {  failed } = progressRef.current;
