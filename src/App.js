@@ -8,6 +8,84 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
+  const containerStyle = {
+    display: "flex",
+    justifyContent: "center",
+    alignItems: "center",
+    minHeight: "100vh",
+    backgroundColor: "#f5f5f5",
+    padding: "20px"
+  };
+
+  const cardStyle = {
+    background: "white",
+    borderRadius: "8px",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.1)",
+    padding: "32px",
+    width: "100%",
+    maxWidth: "400px",
+    textAlign: "center"
+  };
+
+  const headingStyle = {
+    margin: "0 0 16px",
+    color: "#333",
+    fontSize: "24px",
+    fontWeight: "600"
+  };
+
+  const textStyle = {
+    color: "#666",
+    margin: "0 0 24px",
+    fontSize: "15px"
+  };
+
+  const buttonStyle = {
+    width: "100%",
+    padding: "12px",
+    backgroundColor: "#4a6bff",
+    color: "white",
+    border: "none",
+    borderRadius: "6px",
+    fontSize: "16px",
+    fontWeight: "500",
+    cursor: "pointer",
+    transition: "background-color 0.2s",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "8px"
+  };
+
+  const buttonHoverStyle = {
+    ...buttonStyle,
+    backgroundColor: "#3a5bef"
+  };
+
+  const disabledButtonStyle = {
+    ...buttonStyle,
+    backgroundColor: "#ccc",
+    cursor: "not-allowed"
+  };
+
+  const errorStyle = {
+    color: "#d32f2f",
+    backgroundColor: "#fde8e8",
+    padding: "12px",
+    borderRadius: "6px",
+    marginBottom: "20px",
+    fontSize: "14px"
+  };
+
+  const spinnerStyle = {
+    width: "18px",
+    height: "18px",
+    border: "3px solid rgba(255, 255, 255, 0.3)",
+    borderRadius: "50%",
+    borderTopColor: "white",
+    animation: "spin 1s ease-in-out infinite"
+  };
+
   const handleLogin = async () => {
     setError("");
     setLoading(true);
@@ -92,18 +170,18 @@ function LoginForm() {
     };
   
     verifySession();
-    const interval = setInterval(verifySession, 300000); // Check every 5 minutes
+    const interval = setInterval(verifySession, 300000);
     return () => clearInterval(interval);
   }, []);
 
   if (isLoggedIn) {
     return (
-      <div className="auth-container">
-        <div className="auth-card">
-          <h2>Welcome Back!</h2>
-          <p>You are already logged in.</p>
+      <div style={containerStyle}>
+        <div style={cardStyle}>
+          <h2 style={headingStyle}>Welcome Back!</h2>
+          <p style={textStyle}>You are already logged in.</p>
           <button 
-            className="auth-button"
+            style={buttonStyle}
             onClick={() => {
               localStorage.removeItem("kc_session");
               setIsLoggedIn(false);
@@ -117,21 +195,21 @@ function LoginForm() {
   }
 
   return (
-    <div className="auth-container">
-      <div className="auth-card">
-        <h2>Login with KingsChat</h2>
-        <p>Connect your KingsChat account to continue</p>
+    <div style={containerStyle}>
+      <div style={cardStyle}>
+        <h2 style={headingStyle}>Login with KingsChat</h2>
+        <p style={textStyle}>Connect your KingsChat account to continue</p>
         
-        {error && <div className="auth-error">{error}</div>}
+        {error && <div style={errorStyle}>{error}</div>}
 
         <button
-          className="auth-button"
+          style={loading ? disabledButtonStyle : buttonStyle}
           onClick={handleLogin}
           disabled={loading}
         >
           {loading ? (
             <>
-              <span className="spinner"></span>
+              <span style={spinnerStyle}></span>
               Connecting...
             </>
           ) : (
@@ -139,6 +217,11 @@ function LoginForm() {
           )}
         </button>
       </div>
+      <style>{`
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </div>
   );
 }
